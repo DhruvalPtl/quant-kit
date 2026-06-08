@@ -166,27 +166,42 @@ def download_binaries(has_cuda: bool):
     if label.endswith(".tar.gz"):
         import tarfile
         with tarfile.open(archive_path, "r:gz") as t:
-            t.extractall(LLAMA_CPP_DIR)
+            t.extractall(LLAMA_CPP_DIR, filter="data")
     else:
         with zipfile.ZipFile(archive_path, "r") as z:
             z.extractall(LLAMA_CPP_DIR)
     archive_path.unlink()
 
-    # Make all executables runnable (Linux only — no .exe extension)
-    for f in LLAMA_CPP_DIR.rglob("llama-*"):
-        if f.is_file() and not f.suffix:  # no extension = binary
-            f.chmod(0o755)
+    # Flatten: tar.gz often extracts into a subdirectory like llama-b9561-bin-ubuntu-x64/
+    # Move everything up to LLAMA_CPP_DIR root so paths are always consistent
+    import shutil as _shutil
+    moved = 0
+    for f in list(LLAMA_CPP_DIR.rglob("*")):
+        if f.is_file() and f.parent != LLAMA_CPP_DIR:
+            dest = LLAMA_CPP_DIR / f.name
+            if not dest.exists():
+                _shutil.move(str(f), str(dest))
+            moved += 1
 
-    # Also make any file without extension executable
+    if moved:
+        print(f"  Flattened {moved} files to {LLAMA_CPP_DIR}")
+        # Remove now-empty subdirectories
+        for d in [x for x in LLAMA_CPP_DIR.iterdir() if x.is_dir()]:
+            try:
+                d.rmdir()
+            except OSError:
+                pass  # not empty, leave it
+
+    # Make all executables runnable (Linux only — no .exe extension)
     for f in LLAMA_CPP_DIR.rglob("*"):
         if f.is_file() and not f.suffix and not f.name.startswith("."):
             f.chmod(0o755)
 
     ok(f"llama.cpp binaries ready in {LLAMA_CPP_DIR}")
-    
-    # Show what we got
-    bins = [f.name for f in LLAMA_CPP_DIR.rglob("llama-*") if f.is_file() and not f.suffix]
-    print(f"  Key binaries found: {', '.join(sorted(bins)[:6])}...")
+
+    # Show key binaries
+    bins = sorted(f.name for f in LLAMA_CPP_DIR.glob("llama-*") if f.is_file() and not f.suffix)
+    print(f"  Binaries: {', '.join(bins[:8])}{'...' if len(bins) > 8 else ''}")
 
 
 # ─── Step 5: Sparse-clone Python conversion scripts ───────────────────────────
