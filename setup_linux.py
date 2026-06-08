@@ -198,14 +198,36 @@ def download_binaries(has_cuda: bool):
         except Exception:
             pass
 
-    # Safety net: create missing versioned .so.0 symlinks
-    # (some builds ship libfoo.so but the binary links against libfoo.so.0)
+    # Safety net: create missing versioned symlinks
+    # Handles two patterns:
+    #   libfoo.so -> libfoo.so.0        (simple, 1-level)
+    #   libfoo.so.0.0.9562 -> libfoo.so.0  (3-part version, e.g. llama.cpp b9562+)
+    import re as _re
+    from collections import defaultdict as _dd
+
+    # Pattern 1: libXXX.so (real file) missing libXXX.so.0
     for f in list(LLAMA_CPP_DIR.glob("*.so")):
-        if not f.is_symlink():          # only for real files, not existing symlinks
+        if not f.is_symlink():
             versioned = LLAMA_CPP_DIR / (f.name + ".0")
             if not versioned.exists():
                 os.symlink(f.name, str(versioned))
-                print(f"  Versioned symlink: {versioned.name} -> {f.name}")
+                print(f"  Symlink: {versioned.name} -> {f.name}")
+
+    # Pattern 2: libXXX.so.A.B.C (real file) missing libXXX.so.A
+    three_part = _re.compile(r'^(lib.+\.so)\.(\d+)\.\d+\.\d+$')
+    by_base = _dd(list)
+    for f in LLAMA_CPP_DIR.glob("lib*.so.*"):
+        m = three_part.match(f.name)
+        if m and not f.is_symlink():
+            by_base[m.group(1)].append((int(m.group(2)), f.name))
+
+    for base_so, versions in by_base.items():
+        versions.sort(reverse=True)          # pick newest build
+        latest, major = versions[0][1], versions[0][0]
+        so_major = LLAMA_CPP_DIR / f"{base_so}.{major}"
+        if not so_major.exists():
+            os.symlink(latest, str(so_major))
+            print(f"  Symlink: {so_major.name} -> {latest}")
 
     # Make executables runnable
     for f in LLAMA_CPP_DIR.glob("llama-*"):
