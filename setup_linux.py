@@ -172,30 +172,40 @@ def download_binaries(has_cuda: bool):
             z.extractall(LLAMA_CPP_DIR)
     archive_path.unlink()
 
-    # Flatten: tar.gz often extracts into a subdirectory like llama-b9561-bin-ubuntu-x64/
-    # Move everything up to LLAMA_CPP_DIR root so paths are always consistent
+    # Flatten: tar.gz extracts into a subdirectory like llama-b9561-bin-ubuntu-x64/
+    # Find subdirs and move everything up to LLAMA_CPP_DIR root
     import shutil as _shutil
+    subdirs = [d for d in LLAMA_CPP_DIR.iterdir() if d.is_dir()]
     moved = 0
-    for f in list(LLAMA_CPP_DIR.rglob("*")):
-        if f.is_file() and f.parent != LLAMA_CPP_DIR:
-            dest = LLAMA_CPP_DIR / f.name
-            if not dest.exists():
-                _shutil.move(str(f), str(dest))
-            moved += 1
+    for subdir in subdirs:
+        for f in list(subdir.rglob("*")):
+            if f.is_file():
+                dest = LLAMA_CPP_DIR / f.name
+                if not dest.exists():
+                    _shutil.move(str(f), str(dest))
+                    moved += 1
+                try:
+                    dest.chmod(0o755)
+                except Exception:
+                    pass  # skip broken symlinks and .so files
 
     if moved:
         print(f"  Flattened {moved} files to {LLAMA_CPP_DIR}")
-        # Remove now-empty subdirectories
-        for d in [x for x in LLAMA_CPP_DIR.iterdir() if x.is_dir()]:
-            try:
-                d.rmdir()
-            except OSError:
-                pass  # not empty, leave it
 
-    # Make all executables runnable (Linux only — no .exe extension)
-    for f in LLAMA_CPP_DIR.rglob("*"):
-        if f.is_file() and not f.suffix and not f.name.startswith("."):
-            f.chmod(0o755)
+    # Remove now-empty subdirectories
+    for subdir in subdirs:
+        try:
+            _shutil.rmtree(str(subdir))
+        except Exception:
+            pass
+
+    # Make key executables runnable
+    for f in LLAMA_CPP_DIR.glob("llama-*"):
+        if f.is_file():
+            try:
+                f.chmod(0o755)
+            except Exception:
+                pass
 
     ok(f"llama.cpp binaries ready in {LLAMA_CPP_DIR}")
 
