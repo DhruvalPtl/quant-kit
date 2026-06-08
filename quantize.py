@@ -22,7 +22,11 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 
-from config import LLAMA_CPP_DIR, LLAMA_SRC_DIR, MODELS_DIR, OUTPUT_DIR, DEFAULT_QUANTS, LLAMA_QUANTIZE, CONVERT_SCRIPT
+from config import (
+    IS_WINDOWS, LLAMA_CPP_DIR, LLAMA_SRC_DIR,
+    MODELS_DIR, OUTPUT_DIR, DEFAULT_QUANTS,
+    LLAMA_QUANTIZE, CONVERT_SCRIPT
+)
 
 # --- Helpers -------------------------------------------------------------------
 
@@ -38,15 +42,20 @@ def print_step(step: str, msg: str):
 def check_llama_cpp():
     """Make sure llama.cpp binaries exist."""
     if not LLAMA_QUANTIZE.exists():
-        print_step("err", f"llama-quantize.exe not found at: {LLAMA_QUANTIZE}")
-        print_step("info", "Download llama.cpp from: https://github.com/ggerganov/llama.cpp/releases/latest")
-        print_step("info", "Get the file: llama-b*-bin-win-vulkan-x64.zip")
-        print_step("info", f"Extract it to: {LLAMA_CPP_DIR}")
+        print_step("err", f"llama-quantize not found at: {LLAMA_QUANTIZE}")
+        if IS_WINDOWS:
+            print_step("info", "Download llama-b*-bin-win-vulkan-x64.zip from:")
+            print_step("info", "https://github.com/ggerganov/llama.cpp/releases/latest")
+        else:
+            print_step("info", "Run: python setup_linux.py")
         sys.exit(1)
 
     if not CONVERT_SCRIPT.exists():
         print_step("err", f"convert_hf_to_gguf.py not found at: {CONVERT_SCRIPT}")
-        print_step("info", "Download from: https://github.com/ggerganov/llama.cpp/blob/master/convert_hf_to_gguf.py")
+        if IS_WINDOWS:
+            print_step("info", "Download from: https://github.com/ggerganov/llama.cpp/blob/master/convert_hf_to_gguf.py")
+        else:
+            print_step("info", "Run: python setup_linux.py")
         sys.exit(1)
 
     print_step("ok", "llama.cpp binaries found")
@@ -55,7 +64,6 @@ def check_llama_cpp():
 
 def download_model(model_id: str) -> Path:
     """Download model from HuggingFace Hub."""
-    # Convert "Qwen/Qwen2.5-1.5B-Instruct" → "Qwen2.5-1.5B-Instruct"
     model_name = model_id.split("/")[-1]
     local_dir = MODELS_DIR / model_name
 
@@ -65,6 +73,13 @@ def download_model(model_id: str) -> Path:
 
     print_step("info", f"Downloading {model_id} from HuggingFace...")
     print_step("info", "This may take a while depending on model size and internet speed")
+
+    # Disk space warning for large models
+    import shutil as _shutil
+    free_gb = _shutil.disk_usage(str(MODELS_DIR.parent)).free / (1024**3)
+    print_step("info", f"Free disk space: {free_gb:.1f} GB")
+    if free_gb < 30:
+        print_step("warn", "Less than 30GB free — consider using --delete-src flag on Colab")
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -79,7 +94,7 @@ def download_model(model_id: str) -> Path:
 
     except Exception as e:
         print_step("err", f"Download failed: {e}")
-        print_step("info", "Make sure you are logged in: huggingface-cli login")
+        print_step("info", "Make sure HF_TOKEN is set in your .env file")
         sys.exit(1)
 
 
@@ -183,6 +198,11 @@ Examples:
         action="store_true",
         help="Keep the FP16 GGUF file after quantization (deleted by default to save disk)"
     )
+    parser.add_argument(
+        "--delete-src",
+        action="store_true",
+        help="[Colab] Delete downloaded model files after FP16 conversion to free disk space (~24GB for 12B models)"
+    )
 
     args = parser.parse_args()
 
@@ -202,6 +222,14 @@ Examples:
     # Step 3: Convert to FP16 GGUF
     fp16_path = convert_to_fp16_gguf(model_dir, convert_script)
 
+    # Step 3b: [Colab mode] Delete source model files to free disk space
+    if args.delete_src:
+        print()
+        print_step("info", "--delete-src: removing source model files to free disk...")
+        import shutil as _shutil
+        _shutil.rmtree(str(model_dir))
+        freed = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file()) if model_dir.exists() else 0
+        print_step("ok", f"Source files deleted — disk freed")
     # Step 4: Quantize to each target format
     created_quants = []
     print()

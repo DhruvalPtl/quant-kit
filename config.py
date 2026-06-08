@@ -8,8 +8,13 @@ Loads settings from .env file. All other scripts import from here.
 """
 
 import os
+import platform
 from pathlib import Path
 from dotenv import load_dotenv
+
+# ── OS Detection ───────────────────────────────────────────────────────────────
+IS_WINDOWS = platform.system() == "Windows"
+EXE        = ".exe" if IS_WINDOWS else ""    # binaries have .exe on Windows only
 
 # Always load .env from the project root (same folder as this file)
 ENV_FILE = Path(__file__).parent / ".env"
@@ -31,13 +36,15 @@ MODELS_DIR    = ROOT_DIR / "models"
 OUTPUT_DIR    = ROOT_DIR / "output"
 
 # ── llama.cpp binaries ─────────────────────────────────────────────────────────
-LLAMA_QUANTIZE  = LLAMA_CPP_DIR / "llama-quantize.exe"
-LLAMA_CLI       = LLAMA_CPP_DIR / "llama-cli.exe"
-LLAMA_IMATRIX   = LLAMA_CPP_DIR / "llama-imatrix.exe"
+# Works on both Windows (.exe) and Linux (no extension)
+LLAMA_QUANTIZE  = LLAMA_CPP_DIR / f"llama-quantize{EXE}"
+LLAMA_CLI       = LLAMA_CPP_DIR / f"llama-cli{EXE}"
+LLAMA_BENCH     = LLAMA_CPP_DIR / f"llama-bench{EXE}"
+LLAMA_IMATRIX   = LLAMA_CPP_DIR / f"llama-imatrix{EXE}"
 CONVERT_SCRIPT  = LLAMA_SRC_DIR / "convert_hf_to_gguf.py"   # run from LLAMA_SRC_DIR
 
 # ── Default quant types ────────────────────────────────────────────────────────
-DEFAULT_QUANTS = ["Q4_K_M", "Q5_K_M", "Q8_0"]
+DEFAULT_QUANTS = ["Q4_K_M", "Q5_K_M", "Q8_0", "IQ4_XS"]    # IQ4_XS added for Colab
 
 
 def verify_token() -> bool:
