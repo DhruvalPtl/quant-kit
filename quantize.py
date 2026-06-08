@@ -12,6 +12,8 @@ Usage:
 
 import os
 import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import shutil
 import subprocess
 import argparse
@@ -20,16 +22,16 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 
-from config import LLAMA_CPP_DIR, MODELS_DIR, OUTPUT_DIR, DEFAULT_QUANTS, LLAMA_QUANTIZE, CONVERT_SCRIPT
+from config import LLAMA_CPP_DIR, LLAMA_SRC_DIR, MODELS_DIR, OUTPUT_DIR, DEFAULT_QUANTS, LLAMA_QUANTIZE, CONVERT_SCRIPT
 
-# ─── Helpers ───────────────────────────────────────────────────────────────────
+# --- Helpers -------------------------------------------------------------------
 
 def print_step(step: str, msg: str):
     colors = {"info": "\033[94m", "ok": "\033[92m", "warn": "\033[93m", "err": "\033[91m"}
     reset = "\033[0m"
-    icons = {"info": "→", "ok": "✓", "warn": "⚠", "err": "✗"}
+    icons = {"info": "->", "ok": "[OK]", "warn": "[!]", "err": "[ERR]"}
     color = colors.get(step, "")
-    icon = icons.get(step, "•")
+    icon = icons.get(step, "-")
     print(f"{color}{icon} {msg}{reset}")
 
 
@@ -101,7 +103,8 @@ def convert_to_fp16_gguf(model_dir: Path, convert_script: Path) -> Path:
         "--outtype", "f16",
     ]
 
-    result = subprocess.run(cmd, capture_output=False, text=True)
+    # IMPORTANT: run from LLAMA_SRC_DIR so Python finds the 'conversion' package and 'gguf-py'
+    result = subprocess.run(cmd, capture_output=False, text=True, cwd=str(LLAMA_SRC_DIR))
 
     if result.returncode != 0:
         print_step("err", "Conversion failed!")

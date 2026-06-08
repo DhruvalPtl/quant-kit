@@ -26,6 +26,7 @@ if HF_TOKEN:
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT_DIR      = Path(__file__).parent
 LLAMA_CPP_DIR = ROOT_DIR / "llama.cpp"
+LLAMA_SRC_DIR = ROOT_DIR / "llama-src"     # llama.cpp Python source (convert scripts)
 MODELS_DIR    = ROOT_DIR / "models"
 OUTPUT_DIR    = ROOT_DIR / "output"
 
@@ -33,7 +34,7 @@ OUTPUT_DIR    = ROOT_DIR / "output"
 LLAMA_QUANTIZE  = LLAMA_CPP_DIR / "llama-quantize.exe"
 LLAMA_CLI       = LLAMA_CPP_DIR / "llama-cli.exe"
 LLAMA_IMATRIX   = LLAMA_CPP_DIR / "llama-imatrix.exe"
-CONVERT_SCRIPT  = LLAMA_CPP_DIR / "convert_hf_to_gguf.py"
+CONVERT_SCRIPT  = LLAMA_SRC_DIR / "convert_hf_to_gguf.py"   # run from LLAMA_SRC_DIR
 
 # ── Default quant types ────────────────────────────────────────────────────────
 DEFAULT_QUANTS = ["Q4_K_M", "Q5_K_M", "Q8_0"]

@@ -13,6 +13,8 @@ Prerequisites:
 """
 
 import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import argparse
 from pathlib import Path
 from huggingface_hub import HfApi, create_repo, upload_file
@@ -22,8 +24,8 @@ from config import OUTPUT_DIR, HF_TOKEN, verify_token
 def print_step(step: str, msg: str):
     colors = {"info": "\033[94m", "ok": "\033[92m", "warn": "\033[93m", "err": "\033[91m"}
     reset = "\033[0m"
-    icons = {"info": "→", "ok": "✓", "warn": "⚠", "err": "✗"}
-    print(f"{colors.get(step, '')}{icons.get(step, '•')} {msg}{reset}")
+    icons = {"info": "->", "ok": "[OK]", "warn": "[!]", "err": "[ERR]"}
+    print(f"{colors.get(step, '')}{icons.get(step, '-')} {msg}{reset}")
 
 
 def get_files_to_upload(model_dir: Path) -> list[Path]:

@@ -4,6 +4,9 @@
 # Virtual environment
 .venv/
 
+# llama.cpp cloned source (dependency, not our code)
+llama-src/
+
 # Downloaded models (huge files, don't commit)
 models/
 
