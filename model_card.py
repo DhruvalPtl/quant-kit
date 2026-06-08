@@ -9,9 +9,11 @@ Usage:
     python model_card.py --model Qwen2.5-7B-Instruct --original Qwen/Qwen2.5-7B-Instruct --author yourname
 """
 
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import json
 import argparse
-import sys
 from pathlib import Path
 from datetime import datetime
 
@@ -91,13 +93,13 @@ def generate_model_card(
         if hw.get("gpu"):
             hw_str += f" | {hw['gpu']}"
 
-        bench_rows = "| Model | Size | Speed | RAM Usage |\n|---|---|---|---|\n"
+        bench_rows = "| Model | Size | Generation | Prompt Processing |\n|---|---|---|---|\n"
         for r in benchmark_data["results"]:
             if r.get("error"):
                 continue
-            tps = f"{r['tokens_per_sec']} tok/s" if r.get("tokens_per_sec") != "N/A" else "—"
-            ram = f"~{r['ram_used_mb']:.0f} MB" if r.get("ram_used_mb") else "—"
-            bench_rows += f"| `{r['file']}` | {r['size_gb']} GB | {tps} | {ram} |\n"
+            tg  = f"{r['tg_tokens_per_sec']} tok/s" if r.get('tg_tokens_per_sec') not in ("N/A", None) else "—"
+            pp  = f"{r['pp_tokens_per_sec']} tok/s" if r.get('pp_tokens_per_sec') not in ("N/A", None) else "—"
+            bench_rows += f"| `{r['file']}` | {r['size_gb']} GB | {tg} | {pp} |\n"
 
         benchmark_section = f"""
 ## 📊 Benchmark Results
@@ -106,7 +108,8 @@ Tested on: `{hw_str}`
 
 {bench_rows}
 
-> Benchmarks use a fixed prompt with {benchmark_data['results'][0].get('n_tokens_generated', 128)} tokens generated.
+> **Generation speed** = how fast the model outputs tokens (higher = better).
+> **Prompt processing** = how fast it reads your input (higher = better).
 > Results vary by hardware and system load.
 """
 
@@ -240,11 +243,11 @@ def main():
     benchmark_data = None
     bench_file = model_dir / "benchmark.json"
     if bench_file.exists():
-        with open(bench_file) as f:
+        with open(bench_file, encoding="utf-8") as f:
             benchmark_data = json.load(f)
-        print(f"✓ Loaded benchmark data from {bench_file.name}")
+        print(f"[OK] Loaded benchmark data from {bench_file.name}")
     else:
-        print("⚠ No benchmark.json found — model card will skip benchmark section")
+        print("[!] No benchmark.json found -- model card will skip benchmark section")
         print("  Run benchmark.py first to include performance data")
 
     # Find all GGUF files
@@ -252,10 +255,10 @@ def main():
     quant_files = [f for f in quant_files if "F16" not in f.name]
 
     if not quant_files:
-        print("✗ No quantized GGUF files found in output folder")
+        print("[ERR] No quantized GGUF files found in output folder")
         sys.exit(1)
 
-    print(f"✓ Found {len(quant_files)} GGUF files")
+    print(f"[OK] Found {len(quant_files)} GGUF files")
 
     # Generate model card
     card = generate_model_card(
@@ -269,7 +272,7 @@ def main():
     # Save
     out_path = model_dir / "README.md"
     out_path.write_text(card, encoding="utf-8")
-    print(f"✓ Model card saved → {out_path}")
+    print(f"[OK] Model card saved -> {out_path}")
     print()
     print("  Next step: python upload.py --model", args.model, "--author", args.author)
 
