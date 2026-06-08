@@ -16,6 +16,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 import os
 import json
+import tarfile
 import platform
 import subprocess
 import urllib.request
@@ -83,7 +84,7 @@ def check_cuda() -> bool:
 
 # ─── Step 4: Download llama.cpp binaries ──────────────────────────────────────
 
-def get_release_info() -> dict:
+def get_release_info() -> tuple[str, dict]:
     """Fetch latest llama.cpp release asset URLs from GitHub API."""
     header("Fetching latest llama.cpp release info...")
     url = "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest"
@@ -91,11 +92,18 @@ def get_release_info() -> dict:
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.loads(r.read())
 
-    tag  = data["tag_name"]
+    tag    = data["tag_name"]
+    assets = {a["name"]: a["browser_download_url"] for a in data["assets"]}
+
     ok(f"Latest release: {tag}")
 
-    assets = {a["name"]: a["browser_download_url"] for a in data["assets"]}
-    return assets
+    # Show available Linux assets for transparency
+    linux_assets = [n for n in assets if "ubuntu" in n or "linux" in n]
+    print(f"  Available Linux builds:")
+    for n in sorted(linux_assets):
+        print(f"    {n}")
+
+    return tag, assets
 
 
 def download_binaries(has_cuda: bool):
@@ -106,35 +114,43 @@ def download_binaries(has_cuda: bool):
         ok("llama.cpp binaries already installed — skipping download")
         return
 
-    assets = get_release_info()
+    tag, assets = get_release_info()
 
-    # Pick the right binary for this environment
+    # Priority order for Linux binary selection:
+    # 1. ubuntu-x64 (standard, works on Colab T4)
+    # 2. ubuntu-vulkan-x64 (Vulkan compute — for AMD/Intel, not T4)
+    # 3. Any ubuntu x64 build
+    # NOTE: Quantization (llama-quantize) runs on CPU — no GPU needed here.
+    #       GPU is only used in benchmark.py for inference speed testing.
+    
     target = None
     label  = ""
 
-    if has_cuda:
-        # Prefer CUDA Ubuntu build
+    # Try patterns in priority order
+    patterns = [
+        lambda n: "ubuntu" in n and "x64" in n and "vulkan" not in n and "rocm" not in n and "openvino" not in n and "arm" not in n,
+        lambda n: "ubuntu" in n and "x64" in n and "rocm" not in n and "openvino" not in n and "arm" not in n,
+        lambda n: "ubuntu" in n and "x64" in n,
+        lambda n: "linux" in n and "x64" in n,
+        lambda n: "ubuntu" in n and "x86" in n,
+    ]
+
+    for pattern in patterns:
         for name, url in assets.items():
-            if "ubuntu" in name and "cuda" in name and "x64" in name and name.endswith(".zip"):
+            if pattern(name) and (name.endswith(".tar.gz") or name.endswith(".zip")):
                 target = url
                 label  = name
                 break
+        if target:
+            break
 
     if not target:
-        # Fallback: CPU Ubuntu build
-        for name, url in assets.items():
-            if "ubuntu" in name and "x64" in name and "cuda" not in name and name.endswith(".zip"):
-                target = url
-                label  = name
-                break
-
-    if not target:
-        err("Could not find a suitable Linux binary in the latest release.")
-        err("Please check: https://github.com/ggerganov/llama.cpp/releases/latest")
+        err("Could not find a suitable Linux binary.")
+        err(f"Available assets: {list(assets.keys())}")
         sys.exit(1)
 
     header(f"Downloading: {label}")
-    zip_path = ROOT_DIR / "llama_bin.zip"
+    archive_path = ROOT_DIR / label
 
     def progress(block, block_size, total):
         downloaded = block * block_size
@@ -143,20 +159,34 @@ def download_binaries(has_cuda: bool):
             mb  = downloaded / (1024**2)
             print(f"\r  {pct:.0f}% — {mb:.1f} MB", end="", flush=True)
 
-    urllib.request.urlretrieve(target, zip_path, reporthook=progress)
+    urllib.request.urlretrieve(target, archive_path, reporthook=progress)
     print()  # newline after progress
 
     header("Extracting binaries...")
-    with zipfile.ZipFile(zip_path, "r") as z:
-        z.extractall(LLAMA_CPP_DIR)
-    zip_path.unlink()
+    if label.endswith(".tar.gz"):
+        import tarfile
+        with tarfile.open(archive_path, "r:gz") as t:
+            t.extractall(LLAMA_CPP_DIR)
+    else:
+        with zipfile.ZipFile(archive_path, "r") as z:
+            z.extractall(LLAMA_CPP_DIR)
+    archive_path.unlink()
 
-    # Make all executables runnable
-    for f in LLAMA_CPP_DIR.iterdir():
-        if f.is_file() and not f.suffix:
+    # Make all executables runnable (Linux only — no .exe extension)
+    for f in LLAMA_CPP_DIR.rglob("llama-*"):
+        if f.is_file() and not f.suffix:  # no extension = binary
             f.chmod(0o755)
 
-    ok(f"llama.cpp binaries extracted to {LLAMA_CPP_DIR}")
+    # Also make any file without extension executable
+    for f in LLAMA_CPP_DIR.rglob("*"):
+        if f.is_file() and not f.suffix and not f.name.startswith("."):
+            f.chmod(0o755)
+
+    ok(f"llama.cpp binaries ready in {LLAMA_CPP_DIR}")
+    
+    # Show what we got
+    bins = [f.name for f in LLAMA_CPP_DIR.rglob("llama-*") if f.is_file() and not f.suffix]
+    print(f"  Key binaries found: {', '.join(sorted(bins)[:6])}...")
 
 
 # ─── Step 5: Sparse-clone Python conversion scripts ───────────────────────────
