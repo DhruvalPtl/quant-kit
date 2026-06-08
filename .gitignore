@@ -1,0 +1,34 @@
+# !! NEVER commit your token !!
+.env
+
+# Virtual environment
+.venv/
+
+# Downloaded models (huge files, don't commit)
+models/
+
+# Output GGUF files (huge, don't commit — upload to HuggingFace instead)
+output/
+
+# llama.cpp binaries (user downloads separately)
+llama.cpp/*.exe
+llama.cpp/*.dll
+llama.cpp/*.so
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# HuggingFace cache
+.cache/
