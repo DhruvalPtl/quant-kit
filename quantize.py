@@ -148,10 +148,17 @@ def quantize_gguf(fp16_path: Path, quant_type: str, quantize_bin: Path) -> Path:
         quant_type,
     ]
 
-    result = subprocess.run(cmd, capture_output=False, text=True)
+    # On Linux: set LD_LIBRARY_PATH so llama-quantize finds its .so libraries
+    # (they live alongside the binary in llama.cpp/)
+    env = os.environ.copy()
+    lib_dir = str(quantize_bin.parent)
+    existing = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing}" if existing else lib_dir
+
+    result = subprocess.run(cmd, capture_output=False, text=True, env=env)
 
     if result.returncode != 0:
-        print_step("err", f"Quantization to {quant_type} failed!")
+        print_step("err", f"Quantization to {quant_type} failed! (exit code {result.returncode})")
         return None
 
     elapsed = time.time() - start
@@ -239,11 +246,17 @@ Examples:
             created_quants.append(result)
 
     # Step 5: Clean up FP16 (large intermediate file)
-    if not args.keep_fp16 and fp16_path.exists():
+    # ONLY delete if at least one quant succeeded — keep it if all failed!
+    if created_quants and not args.keep_fp16 and fp16_path.exists():
         print()
         print_step("info", f"Removing FP16 base file to save disk space...")
         fp16_path.unlink()
         print_step("ok", "FP16 file removed")
+    elif not created_quants and fp16_path.exists():
+        print()
+        print_step("warn", "All quantizations failed — keeping FP16 file for retry")
+        print_step("info", f"FP16 file: {fp16_path}")
+        print_step("info", "Fix the error above, then re-run quantize.py (FP16 won't be re-created)")
 
     # Summary
     print("\n" + "="*60)
