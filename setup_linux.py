@@ -164,33 +164,32 @@ def download_binaries(has_cuda: bool):
 
     header("Extracting binaries...")
     if label.endswith(".tar.gz"):
-        import tarfile
         with tarfile.open(archive_path, "r:gz") as t:
-            t.extractall(LLAMA_CPP_DIR, filter="data")
+            t.extractall(LLAMA_CPP_DIR)   # no filter= so symlinks are preserved
     else:
         with zipfile.ZipFile(archive_path, "r") as z:
             z.extractall(LLAMA_CPP_DIR)
     archive_path.unlink()
 
     # Flatten: tar.gz extracts into a subdirectory like llama-b9561-bin-ubuntu-x64/
-    # Find subdirs and move everything up to LLAMA_CPP_DIR root
+    # Move ALL entries (files AND symlinks) up to LLAMA_CPP_DIR root
     import shutil as _shutil
     subdirs = [d for d in LLAMA_CPP_DIR.iterdir() if d.is_dir()]
     moved = 0
     for subdir in subdirs:
-        for f in list(subdir.rglob("*")):
-            if f.is_file():
-                dest = LLAMA_CPP_DIR / f.name
-                if not dest.exists():
+        for f in list(subdir.iterdir()):   # one level only — symlinks live here
+            dest = LLAMA_CPP_DIR / f.name
+            if not dest.exists():
+                if f.is_symlink():
+                    # Recreate symlink at root pointing to same target name
+                    link_target = os.readlink(f)
+                    os.symlink(link_target, dest)
+                else:
                     _shutil.move(str(f), str(dest))
-                    moved += 1
-                try:
-                    dest.chmod(0o755)
-                except Exception:
-                    pass  # skip broken symlinks and .so files
+                moved += 1
 
     if moved:
-        print(f"  Flattened {moved} files to {LLAMA_CPP_DIR}")
+        print(f"  Flattened {moved} entries to {LLAMA_CPP_DIR}")
 
     # Remove now-empty subdirectories
     for subdir in subdirs:
@@ -199,9 +198,18 @@ def download_binaries(has_cuda: bool):
         except Exception:
             pass
 
-    # Make key executables runnable
+    # Safety net: create missing versioned .so.0 symlinks
+    # (some builds ship libfoo.so but the binary links against libfoo.so.0)
+    for f in list(LLAMA_CPP_DIR.glob("*.so")):
+        if not f.is_symlink():          # only for real files, not existing symlinks
+            versioned = LLAMA_CPP_DIR / (f.name + ".0")
+            if not versioned.exists():
+                os.symlink(f.name, str(versioned))
+                print(f"  Versioned symlink: {versioned.name} -> {f.name}")
+
+    # Make executables runnable
     for f in LLAMA_CPP_DIR.glob("llama-*"):
-        if f.is_file():
+        if f.is_file() and not f.is_symlink():
             try:
                 f.chmod(0o755)
             except Exception:
@@ -212,6 +220,7 @@ def download_binaries(has_cuda: bool):
     # Show key binaries
     bins = sorted(f.name for f in LLAMA_CPP_DIR.glob("llama-*") if f.is_file() and not f.suffix)
     print(f"  Binaries: {', '.join(bins[:8])}{'...' if len(bins) > 8 else ''}")
+
 
 
 # ─── Step 5: Sparse-clone Python conversion scripts ───────────────────────────
