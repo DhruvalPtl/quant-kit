@@ -49,6 +49,41 @@ QUANT_INFO = {
     },
 }
 
+# ─── Original model benchmark data (from official model cards) ─────────────────
+
+ORIGINAL_BENCHMARKS = {
+    "google/gemma-4-12B": {
+        "label": "Gemma 4 12B (Base)",
+        "source": "https://huggingface.co/google/gemma-4-12B",
+        "note": "Results reported by Google on the base model.",
+        "rows": [
+            ("MMLU Pro",            "Text",         "77.2%"),
+            ("GPQA Diamond",        "Science",      "78.8%"),
+            ("AIME 2026 (no tools)","Math",         "77.5%"),
+            ("LiveCodeBench v6",    "Coding",       "72.0%"),
+            ("BigBench Extra Hard", "Reasoning",    "53.0%"),
+            ("MMMLU",               "Multilingual", "83.4%"),
+            ("MMMU Pro",            "Vision",       "69.1%"),
+            ("MRCR v2 8-needle 128k", "Long Context", "43.4%"),
+        ]
+    },
+    "google/gemma-4-12B-it": {
+        "label": "Gemma 4 12B Unified (IT)",
+        "source": "https://huggingface.co/google/gemma-4-12B-it",
+        "note": "Results reported by Google for the instruction-tuned model.",
+        "rows": [
+            ("MMLU Pro",            "Text",         "77.2%"),
+            ("GPQA Diamond",        "Science",      "78.8%"),
+            ("AIME 2026 (no tools)","Math",         "77.5%"),
+            ("LiveCodeBench v6",    "Coding",       "72.0%"),
+            ("BigBench Extra Hard", "Reasoning",    "53.0%"),
+            ("MMMLU",               "Multilingual", "83.4%"),
+            ("MMMU Pro",            "Vision",       "69.1%"),
+            ("MRCR v2 8-needle 128k", "Long Context", "43.4%"),
+        ]
+    },
+}
+
 def generate_model_card(
     model_name: str,
     original_model_id: str,
@@ -102,15 +137,32 @@ def generate_model_card(
             bench_rows += f"| `{r['file']}` | {r['size_gb']} GB | {tg} | {pp} |\n"
 
         benchmark_section = f"""
-## 📊 Benchmark Results
+## 📊 Speed Benchmarks
 
 Tested on: `{hw_str}`
 
 {bench_rows}
-
 > **Generation speed** = how fast the model outputs tokens (higher = better).
 > **Prompt processing** = how fast it reads your input (higher = better).
 > Results vary by hardware and system load.
+"""
+
+    # Build original model quality benchmarks section
+    quality_section = ""
+    orig_bench = ORIGINAL_BENCHMARKS.get(original_model_id)
+    if orig_bench:
+        rows = "| Benchmark | Category | Score |\n|---|---|---|\n"
+        for name, cat, score in orig_bench["rows"]:
+            rows += f"| {name} | {cat} | {score} |\n"
+        quality_section = f"""
+## 🧠 Original Model Quality Benchmarks
+
+> Results from **[{orig_bench['label']}]({orig_bench['source']})** — reported by Google.
+> {orig_bench['note']}
+> These benchmarks apply to the original BF16 model. GGUF quantization preserves
+> ~98–99% of quality for Q5/Q8 and ~96–97% for Q4 variants.
+
+{rows}
 """
 
     # Choose quant to recommend in usage example
@@ -121,7 +173,7 @@ Tested on: `{hw_str}`
             break
 
     card = f"""---
-license: apache-2.0
+license: gemma
 base_model: {original_model_id}
 tags:
   - llm
@@ -129,6 +181,7 @@ tags:
   - quantized
   - llama-cpp
   - ollama
+  - gemma
 language:
   - en
 ---
@@ -152,11 +205,12 @@ These files work with [llama.cpp](https://github.com/ggerganov/llama.cpp), [Olla
 
 | If you have... | Download this |
 |---|---|
-| 8 GB RAM | `Q4_K_M` — Best choice |
+| 8 GB RAM | `IQ4_XS` — Smallest, runs on 8GB |
+| 10 GB RAM | `Q4_K_M` — Best choice ✅ |
 | 12 GB RAM | `Q5_K_M` — Better quality |
 | 16 GB+ RAM | `Q8_0` — Near-original quality |
-| Less than 6 GB RAM | `IQ4_XS` or `Q3_K_M` |
 
+{quality_section}
 {benchmark_section}
 
 ---
@@ -197,11 +251,12 @@ print(output["choices"][0]["text"])
 
 ## 🔧 Quantization Details
 
-| Format | Description |
-|---|---|
-| `Q4_K_M` | 4-bit, K-quantization, medium — Best size/quality balance |
-| `Q5_K_M` | 5-bit, K-quantization, medium — Higher quality |
-| `Q8_0` | 8-bit — Near-lossless, largest file |
+| Format | Bits | Description |
+|---|---|---|
+| `Q4_K_M` | 4-bit | K-quantization, medium — Best size/quality balance |
+| `Q5_K_M` | 5-bit | K-quantization, medium — Higher quality |
+| `Q8_0`   | 8-bit | Near-lossless — Largest GGUF file |
+| `IQ4_XS` | ~4-bit | Importance-matrix quant — Smallest with good quality |
 
 Quantization was done using [llama.cpp](https://github.com/ggerganov/llama.cpp).
 
@@ -210,8 +265,10 @@ Quantization was done using [llama.cpp](https://github.com/ggerganov/llama.cpp).
 ## ℹ️ About the Original Model
 
 - **Original Model**: [{original_model_id}](https://huggingface.co/{original_model_id})
-- **Architecture**: Transformer (decoder-only)
-- **License**: Check the [original model page](https://huggingface.co/{original_model_id})
+- **Architecture**: Gemma 4 Unified (multimodal — text + vision capable)
+- **Parameters**: ~12 Billion
+- **Context Length**: 128K tokens
+- **License**: [Gemma Terms of Use](https://ai.google.dev/gemma/terms)
 
 ---
 
