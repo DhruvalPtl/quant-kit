@@ -88,9 +88,15 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=env,
         )
-        out, err = proc.communicate(timeout=600)
-        stdout_buf.append(out)
-        stderr_buf.append(err)
+        try:
+            out, err = proc.communicate(timeout=1800)   # 30 min max per quant
+            stdout_buf.append(out)
+            stderr_buf.append(err)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()   # drain pipes
+            stdout_buf.append("")
+            stderr_buf.append("TIMEOUT")
 
     t = _threading.Thread(target=_run, daemon=True)
     t.start()
@@ -106,14 +112,15 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
 
     print()  # newline after spinner
 
-    if not stdout_buf:
-        print_step("err", "Benchmark process did not return output")
-        return {"file": gguf_path.name, "size_gb": size_gb, "error": "no output",
-                "pp_tokens_per_sec": "N/A", "tg_tokens_per_sec": "N/A", "gpu_layers": ngl}
-
-    result_stdout = stdout_buf[0]
-    result_stderr = stderr_buf[0]
+    result_stdout = stdout_buf[0] if stdout_buf else ""
+    result_stderr = stderr_buf[0] if stderr_buf else ""
     return_code   = proc.returncode if proc else -1
+
+    if result_stderr == "TIMEOUT" or not result_stdout.strip():
+        print_step("warn", f"Benchmark timed out or produced no output — skipping {gguf_path.name}")
+        return {"file": gguf_path.name, "size_gb": size_gb, "elapsed_sec": round(time.time()-start,1),
+                "ram_used_mb": 0, "pp_tokens_per_sec": "timeout", "tg_tokens_per_sec": "timeout",
+                "gpu_layers": ngl}
 
     if return_code != 0:
         print_step("err", f"llama-bench exited with code {return_code}")
