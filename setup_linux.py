@@ -85,39 +85,56 @@ def install_gpu_deps(has_cuda: bool):
     if not has_cuda:
         return
 
+    # Check if already installed with CUDA
+    check = subprocess.run(
+        f"{sys.executable} -c \"import llama_cpp; print(llama_cpp.__version__)\"",
+        shell=True, capture_output=True, text=True
+    )
+    if check.returncode == 0:
+        ok(f"llama-cpp-python already installed (v{check.stdout.strip()}) — skipping")
+        return
+
     header("Installing llama-cpp-python with CUDA (for GPU benchmarking)...")
 
-    # Detect CUDA version for correct wheel
+    # Detect CUDA version
     nvcc = subprocess.run("nvcc --version", shell=True, capture_output=True, text=True)
-    cuda_ver = "cu124"   # Colab default (CUDA 12.4)
+    cuda_ver = "cu124"   # Colab default
     if nvcc.returncode == 0:
+        import re as _re
         for line in nvcc.stdout.splitlines():
             if "release" in line.lower():
-                import re
-                m = re.search(r"release (\d+)\.(\d+)", line)
+                m = _re.search(r"release (\d+)\.(\d+)", line)
                 if m:
-                    major, minor = m.group(1), m.group(2)
-                    cuda_ver = f"cu{major}{minor}"
+                    cuda_ver = f"cu{m.group(1)}{m.group(2)}"
                     break
 
-    wheel_url = f"https://abetlen.github.io/llama-cpp-python/whl/{cuda_ver}"
-    cmd = (f"{sys.executable} -m pip install llama-cpp-python "
-           f"--extra-index-url {wheel_url} -q --force-reinstall")
-
+    # Use --index-url (ONLY look at CUDA wheel index, not PyPI)
+    # This prevents pip from falling back to slow source compilation
+    wheel_index = f"https://abetlen.github.io/llama-cpp-python/whl/{cuda_ver}"
+    cmd = (
+        f"{sys.executable} -m pip install llama-cpp-python "
+        f"--index-url {wheel_index} -q"
+    )
     result = subprocess.run(cmd, shell=True)
     if result.returncode == 0:
-        ok(f"llama-cpp-python (CUDA/{cuda_ver}) installed — GPU benchmarking enabled")
+        ok(f"llama-cpp-python (CUDA/{cuda_ver} wheel) installed — GPU benchmarking enabled")
+        return
+
+    warn(f"CUDA wheel not found for {cuda_ver} — compiling from source with CUDA (~15 min)...")
+    # Source build: MUST set CMAKE_ARGS for CUDA, otherwise gets CPU-only build
+    import platform as _pl
+    nproc = os.cpu_count() or 2
+    env = os.environ.copy()
+    env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+    env["FORCE_CMAKE"] = "1"
+    r2 = subprocess.run(
+        f"{sys.executable} -m pip install llama-cpp-python -q",
+        shell=True, env=env
+    )
+    if r2.returncode == 0:
+        ok("llama-cpp-python (CUDA source build) installed")
     else:
-        warn("CUDA wheel failed — trying source build (may take 15 min)...")
-        src_cmd = (
-            f"CMAKE_ARGS='-DGGML_CUDA=on' "
-            f"{sys.executable} -m pip install llama-cpp-python --force-reinstall -q"
-        )
-        r2 = subprocess.run(src_cmd, shell=True)
-        if r2.returncode == 0:
-            ok("llama-cpp-python (CUDA, built from source) installed")
-        else:
-            warn("Could not install CUDA support — benchmarks will run on CPU")
+        warn("Could not install CUDA llama-cpp-python — benchmarks will run on CPU")
 
 
 # ─── Step 4: Download llama.cpp binaries ──────────────────────────────────────
