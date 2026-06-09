@@ -53,102 +53,118 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
     """
     print_step("info", f"Benchmarking {gguf_path.name}...")
 
-    ram_before = psutil.virtual_memory().used / (1024 ** 2)
-    start = time.time()
+    size_gb = get_file_size_gb(gguf_path)
+    print(f"   File  : {gguf_path.name}  ({size_gb:.1f} GB)")
+    print(f"   GPU   : {ngl} layers offloaded to VRAM")
+    print(f"   Tasks : pp512 (prompt speed)  +  tg128 (generation speed)")
+    print(f"   Status: loading model... (no output until done — may take 5–15 min)")
+    import sys as _sys
+    _sys.stdout.flush()
 
-    cmd = [
-        str(LLAMA_BENCH),
-        "-m", str(gguf_path),
-        "-ngl", str(ngl),       # GPU layers to offload (99 = all)
-        "-t", "4",              # CPU threads
-        "-p", "512",            # prompt tokens for pp test
-        "-n", "128",            # output tokens for tg test
-        "-r", "1",              # 1 repetition (faster)
-        "--output", "json",     # clean JSON output — easy to parse
-    ]
+    ram_before = psutil.virtual_memory().used / (1024 ** 2)
+    start      = time.time()
 
     # On Linux: set LD_LIBRARY_PATH so llama-bench finds its .so libraries
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = str(LLAMA_CPP_DIR) + ":" + env.get("LD_LIBRARY_PATH", "")
 
-    try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=300,
-            text=True,
-            env=env,
+    import threading as _threading
+
+    stdout_buf, stderr_buf = [], []
+    proc = None
+
+    def _run():
+        nonlocal proc
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env,
         )
-    except subprocess.TimeoutExpired:
-        print_step("warn", "Benchmark timed out after 5 minutes — skipping")
-        return {"file": gguf_path.name, "error": "timeout"}
-    except Exception as e:
-        print_step("err", f"Benchmark failed: {e}")
-        return {"file": gguf_path.name, "error": str(e)}
+        out, err = proc.communicate(timeout=600)
+        stdout_buf.append(out)
+        stderr_buf.append(err)
+
+    t = _threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    # Print live elapsed time so the user knows it's running
+    tick = 0
+    spinner = ["|", "/", "-", "\\"]
+    while t.is_alive():
+        elapsed_live = time.time() - start
+        print(f"\r   {spinner[tick % 4]}  Running... {elapsed_live:.0f}s elapsed", end="", flush=True)
+        tick += 1
+        t.join(timeout=15)   # update every 15 seconds
+
+    print()   # newline after spinner
+
+    if not stdout_buf:
+        print_step("err", "Benchmark process did not return output")
+        return {"file": gguf_path.name, "error": "no output"}
+
+    result_stdout = stdout_buf[0]
+    result_stderr = stderr_buf[0]
+    return_code   = proc.returncode if proc else -1
+
+    if return_code != 0:
+        print_step("err", f"llama-bench exited with code {return_code}")
+        print(result_stderr[:400] if result_stderr else "(no stderr)")
+        return {"file": gguf_path.name, "error": f"exit {return_code}"}
+
+
 
 
     elapsed = time.time() - start
-    ram_after = psutil.virtual_memory().used / (1024 ** 2)
+    ram_after  = psutil.virtual_memory().used / (1024 ** 2)
     ram_used_mb = max(0, ram_after - ram_before)
 
     pp_tps = None   # prompt processing tokens/sec
     tg_tps = None   # token generation tokens/sec
 
     # Parse JSON output from llama-bench
-    if result.returncode == 0 and result.stdout.strip():
+    if result_stdout.strip():
         try:
-            data = json.loads(result.stdout)
-            # llama-bench JSON: list of {test_name, t_s, ...}
+            data = json.loads(result_stdout)
             for entry in data:
-                test = entry.get("n_prompt", 0)
                 if isinstance(entry, dict):
                     if entry.get("n_prompt", 0) > 0 and entry.get("n_gen", 0) == 0:
                         pp_tps = round(float(entry.get("avg_ts", 0)), 1)
                     elif entry.get("n_gen", 0) > 0 and entry.get("n_prompt", 0) == 0:
                         tg_tps = round(float(entry.get("avg_ts", 0)), 1)
         except (json.JSONDecodeError, KeyError, TypeError):
-            # Fallback: parse the markdown table from stdout
-            for line in result.stdout.splitlines():
+            # Fallback: parse markdown table
+            for line in result_stdout.splitlines():
                 if "|" in line and "pp" in line.lower():
-                    parts = [p.strip() for p in line.split("|")]
-                    for p in parts:
+                    for p in [p.strip() for p in line.split("|")]:
                         try:
                             val = float(p.split("±")[0].strip())
-                            if val > 0:
-                                pp_tps = round(val, 1)
-                        except (ValueError, IndexError):
-                            pass
+                            if val > 0: pp_tps = round(val, 1)
+                        except (ValueError, IndexError): pass
                 if "|" in line and "tg" in line.lower():
-                    parts = [p.strip() for p in line.split("|")]
-                    for p in parts:
+                    for p in [p.strip() for p in line.split("|")]:
                         try:
                             val = float(p.split("±")[0].strip())
-                            if val > 0:
-                                tg_tps = round(val, 1)
-                        except (ValueError, IndexError):
-                            pass
+                            if val > 0: tg_tps = round(val, 1)
+                        except (ValueError, IndexError): pass
 
     result_data = {
-        "file":             gguf_path.name,
-        "size_gb":          round(get_file_size_gb(gguf_path), 2),
-        "elapsed_sec":      round(elapsed, 1),
-        "ram_used_mb":      round(ram_used_mb, 0),
-        "pp_tokens_per_sec": pp_tps or "N/A",   # prompt processing
-        "tg_tokens_per_sec": tg_tps or "N/A",   # text generation (most important)
-        "gpu_layers":       ngl,
+        "file":              gguf_path.name,
+        "size_gb":           round(get_file_size_gb(gguf_path), 2),
+        "elapsed_sec":       round(elapsed, 1),
+        "ram_used_mb":       round(ram_used_mb, 0),
+        "pp_tokens_per_sec": pp_tps or "N/A",
+        "tg_tokens_per_sec": tg_tps or "N/A",
+        "gpu_layers":        ngl,
     }
 
     if tg_tps:
         print_step("ok", f"  Generation: {tg_tps} tok/s | Prompt: {pp_tps} tok/s | RAM: {ram_used_mb:.0f} MB")
     else:
-        print_step("warn", f"  Could not parse speed from output. Raw stdout below:")
-        print(result.stdout[:500] if result.stdout else "(empty)")
-        if result.returncode != 0:
-            print_step("err", f"  llama-bench exited with code {result.returncode}")
-            print(result.stderr[:300] if result.stderr else "")
+        print_step("warn", "Could not parse speed — raw output:")
+        print(result_stdout[:500] if result_stdout else "(empty)")
 
     return result_data
+
+
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
