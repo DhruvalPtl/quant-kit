@@ -6,8 +6,8 @@ and quantizes it into multiple bit-width variants using llama.cpp.
 
 Usage:
     python quantize.py --model Qwen/Qwen2.5-1.5B-Instruct
+    python quantize.py --model google/gemma-4-12b-it --preset full
     python quantize.py --model Qwen/Qwen2.5-7B-Instruct --quants Q4_K_M Q8_0
-    python quantize.py --model meta-llama/Llama-3.2-3B-Instruct --quants Q4_K_M Q5_K_M Q8_0
 """
 
 import os
@@ -20,26 +20,17 @@ import argparse
 import time
 from pathlib import Path
 from huggingface_hub import snapshot_download
-from tqdm import tqdm
 
 from config import (
     IS_WINDOWS, LLAMA_CPP_DIR, LLAMA_SRC_DIR,
-    MODELS_DIR, OUTPUT_DIR, DEFAULT_QUANTS,
-    LLAMA_QUANTIZE, CONVERT_SCRIPT
+    MODELS_DIR, OUTPUT_DIR, DEFAULT_QUANTS, QUANT_PRESETS,
+    LLAMA_QUANTIZE, CONVERT_SCRIPT, LLAMA_IMATRIX
 )
+from utils import print_step, get_size
 
 # --- Helpers -------------------------------------------------------------------
 
-def print_step(step: str, msg: str):
-    colors = {"info": "\033[94m", "ok": "\033[92m", "warn": "\033[93m", "err": "\033[91m"}
-    reset = "\033[0m"
-    icons = {"info": "->", "ok": "[OK]", "warn": "[!]", "err": "[ERR]"}
-    color = colors.get(step, "")
-    icon = icons.get(step, "-")
-    print(f"{color}{icon} {msg}{reset}")
-
-
-def check_llama_cpp():
+def check_llama_cpp(requires_imatrix: bool = False):
     """Make sure llama.cpp binaries exist."""
     if not LLAMA_QUANTIZE.exists():
         print_step("err", f"llama-quantize not found at: {LLAMA_QUANTIZE}")
@@ -52,14 +43,13 @@ def check_llama_cpp():
 
     if not CONVERT_SCRIPT.exists():
         print_step("err", f"convert_hf_to_gguf.py not found at: {CONVERT_SCRIPT}")
-        if IS_WINDOWS:
-            print_step("info", "Download from: https://github.com/ggerganov/llama.cpp/blob/master/convert_hf_to_gguf.py")
-        else:
-            print_step("info", "Run: python setup_linux.py")
+        sys.exit(1)
+
+    if requires_imatrix and not LLAMA_IMATRIX.exists():
+        print_step("err", f"llama-imatrix not found at: {LLAMA_IMATRIX}")
         sys.exit(1)
 
     print_step("ok", "llama.cpp binaries found")
-    return LLAMA_QUANTIZE, CONVERT_SCRIPT
 
 
 def download_model(model_id: str) -> Path:
@@ -72,14 +62,9 @@ def download_model(model_id: str) -> Path:
         return local_dir
 
     print_step("info", f"Downloading {model_id} from HuggingFace...")
-    print_step("info", "This may take a while depending on model size and internet speed")
-
-    # Disk space warning for large models
     import shutil as _shutil
     free_gb = _shutil.disk_usage(str(MODELS_DIR.parent)).free / (1024**3)
     print_step("info", f"Free disk space: {free_gb:.1f} GB")
-    if free_gb < 30:
-        print_step("warn", "Less than 30GB free — consider using --delete-src flag on Colab")
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -98,27 +83,31 @@ def download_model(model_id: str) -> Path:
         sys.exit(1)
 
 
-def convert_to_fp16_gguf(model_dir: Path, convert_script: Path) -> Path:
+def convert_to_fp16_gguf(model_dir: Path) -> Path:
     """Convert HuggingFace model to FP16 GGUF (lossless base format)."""
     model_name = model_dir.name
     output_path = OUTPUT_DIR / model_name / f"{model_name}-F16.gguf"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if output_path.exists():
-        print_step("ok", f"F16 GGUF already exists: {output_path.name}")
-        return output_path
+        # Check if it's a corrupted partial file from a canceled run (must be > 1GB)
+        if output_path.stat().st_size > 1024**3:
+            print_step("ok", f"F16 GGUF already exists: {output_path.name}")
+            return output_path
+        else:
+            print_step("warn", f"Found incomplete F16 file ({get_size(output_path)}). Rebuilding...")
+            output_path.unlink()
 
     print_step("info", f"Converting to FP16 GGUF...")
 
     cmd = [
         sys.executable,
-        str(convert_script),
+        str(CONVERT_SCRIPT),
         str(model_dir),
         "--outfile", str(output_path),
         "--outtype", "f16",
     ]
 
-    # IMPORTANT: run from LLAMA_SRC_DIR so Python finds the 'conversion' package and 'gguf-py'
     result = subprocess.run(cmd, capture_output=False, text=True, cwd=str(LLAMA_SRC_DIR))
 
     if result.returncode != 0:
@@ -129,29 +118,68 @@ def convert_to_fp16_gguf(model_dir: Path, convert_script: Path) -> Path:
     return output_path
 
 
-def quantize_gguf(fp16_path: Path, quant_type: str, quantize_bin: Path) -> Path:
+def generate_imatrix(fp16_path: Path, calibration_file: Path) -> Path:
+    """Generate importance matrix for better low-bit quantization."""
+    output_path = fp16_path.parent / "imatrix.dat"
+    if output_path.exists():
+        print_step("ok", f"imatrix already exists: {output_path.name}")
+        return output_path
+
+    print_step("info", f"Generating imatrix using {calibration_file.name}...")
+    start = time.time()
+
+    cmd = [
+        str(LLAMA_IMATRIX),
+        "-m", str(fp16_path),
+        "-f", str(calibration_file),
+        "-o", str(output_path),
+    ]
+
+    env = os.environ.copy()
+    lib_dir = str(LLAMA_IMATRIX.parent)
+    existing = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing}" if existing else lib_dir
+
+    result = subprocess.run(cmd, capture_output=False, text=True, env=env)
+
+    if result.returncode != 0:
+        print_step("err", f"imatrix generation failed! (exit code {result.returncode})")
+        sys.exit(1)
+
+    elapsed = time.time() - start
+    print_step("ok", f"imatrix created in {elapsed:.1f}s -> {output_path.name}")
+    return output_path
+
+
+def quantize_gguf(fp16_path: Path, quant_type: str, imatrix_path: Path = None) -> Path:
     """Quantize an FP16 GGUF to a specific quant type."""
     model_name = fp16_path.parent.name
     output_path = fp16_path.parent / f"{model_name}-{quant_type}.gguf"
 
     if output_path.exists():
-        print_step("ok", f"Already exists: {output_path.name} ({get_size(output_path)})")
-        return output_path
+        # A real quantized GGUF for a 12B model must be at least 100MB
+        if output_path.stat().st_size > 100 * 1024 * 1024:
+            print_step("ok", f"Already exists: {output_path.name} ({get_size(output_path)})")
+            return output_path
+        else:
+            print_step("warn", f"Found corrupted quant ({get_size(output_path)}), deleting and re-quantizing...")
+            output_path.unlink()
 
     print_step("info", f"Quantizing to {quant_type}...")
     start = time.time()
 
     cmd = [
-        str(quantize_bin),
+        str(LLAMA_QUANTIZE),
         str(fp16_path),
         str(output_path),
         quant_type,
     ]
+    
+    if imatrix_path and imatrix_path.exists() and quant_type.startswith("IQ"):
+        cmd.extend(["--imatrix", str(imatrix_path)])
 
-    # On Linux: set LD_LIBRARY_PATH so llama-quantize finds its .so libraries
-    # (they live alongside the binary in llama.cpp/)
     env = os.environ.copy()
-    lib_dir = str(quantize_bin.parent)
+    lib_dir = str(LLAMA_QUANTIZE.parent)
     existing = env.get("LD_LIBRARY_PATH", "")
     env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing}" if existing else lib_dir
 
@@ -166,110 +194,109 @@ def quantize_gguf(fp16_path: Path, quant_type: str, quantize_bin: Path) -> Path:
     return output_path
 
 
-def get_size(path: Path) -> str:
-    """Return human-readable file size."""
-    size = path.stat().st_size
-    for unit in ["B", "KB", "MB", "GB"]:
-        if size < 1024:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
-
-
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
         description="Quantize a HuggingFace model to GGUF format",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python quantize.py --model Qwen/Qwen2.5-1.5B-Instruct
-  python quantize.py --model Qwen/Qwen2.5-7B-Instruct --quants Q4_K_M Q8_0
-  python quantize.py --model meta-llama/Llama-3.2-3B-Instruct --quants Q4_K_M Q5_K_M Q8_0
-        """
     )
-    parser.add_argument(
-        "--model", "-m",
-        required=True,
-        help="HuggingFace model ID (e.g. Qwen/Qwen2.5-1.5B-Instruct)"
-    )
-    parser.add_argument(
-        "--quants", "-q",
-        nargs="+",
-        default=DEFAULT_QUANTS,
-        help=f"Quant types to generate (default: {' '.join(DEFAULT_QUANTS)})"
-    )
-    parser.add_argument(
-        "--keep-fp16",
-        action="store_true",
-        help="Keep the FP16 GGUF file after quantization (deleted by default to save disk)"
-    )
-    parser.add_argument(
-        "--delete-src",
-        action="store_true",
-        help="[Colab] Delete downloaded model files after FP16 conversion to free disk space (~24GB for 12B models)"
-    )
+    parser.add_argument("--model", "-m", required=True, help="HuggingFace model ID (e.g. Qwen/Qwen2.5-1.5B-Instruct)")
+    parser.add_argument("--quants", "-q", nargs="+", help="Explicit quant types to generate")
+    parser.add_argument("--preset", "-p", choices=list(QUANT_PRESETS.keys()), default="standard", help="Quantization preset (standard, full, imatrix, all)")
+    parser.add_argument("--calibration", "-c", help="Path to text file for imatrix calibration")
+    parser.add_argument("--keep-fp16", action="store_true", help="Keep the FP16 GGUF file after quantization")
+    parser.add_argument("--delete-src", action="store_true", help="Delete downloaded model files after FP16 conversion to free disk space")
+    parser.add_argument("--batch", "-b", type=int, default=0,
+        help="Process N quants per run (re-run to continue). Already-completed quants are skipped. Example: --batch 2")
 
     args = parser.parse_args()
+
+    all_quants = args.quants if args.quants else QUANT_PRESETS[args.preset]
+    requires_imatrix = any(q.startswith("IQ") for q in all_quants)
+
+    # ── Batch mode: figure out which quants still need to be done ──────────────
+    model_name = args.model.split("/")[-1]
+    output_dir = OUTPUT_DIR / model_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def is_done(quant_type: str) -> bool:
+        """Return True if this quant already exists and is valid (> 100MB)."""
+        p = output_dir / f"{model_name}-{quant_type}.gguf"
+        return p.exists() and p.stat().st_size > 100 * 1024 * 1024
+
+    pending   = [q for q in all_quants if not is_done(q)]
+    completed = [q for q in all_quants if is_done(q)]
+
+    # If --batch N, only take the next N pending quants this run
+    if args.batch > 0:
+        quants_this_run = pending[:args.batch]
+    else:
+        quants_this_run = pending
+
+    remaining_after = [q for q in pending if q not in quants_this_run]
 
     print("\n" + "="*60)
     print("  quant-kit — GGUF Quantization Tool")
     print("="*60)
-    print(f"  Model  : {args.model}")
-    print(f"  Quants : {', '.join(args.quants)}")
+    print(f"  Model      : {args.model}")
+    print(f"  Total      : {len(all_quants)} quants ({', '.join(all_quants)})")
+    print(f"  Done       : {len(completed)} ({', '.join(completed) if completed else 'none'})")
+    print(f"  This run   : {len(quants_this_run)} ({', '.join(quants_this_run) if quants_this_run else 'none'})")
+    if remaining_after:
+        print(f"  After this : {len(remaining_after)} remaining — re-run the same command to continue")
+    print(f"  iMatrix    : {'Required' if requires_imatrix else 'Not needed'}")
     print("="*60 + "\n")
 
-    # Step 1: Check tools
-    quantize_bin, convert_script = check_llama_cpp()
+    if not quants_this_run:
+        print_step("ok", "All quants are already complete! Nothing to do.")
+        print_step("info", "Run: python benchmark.py --model " + model_name)
+        return
 
-    # Step 2: Download model
+    check_llama_cpp(requires_imatrix=requires_imatrix)
     model_dir = download_model(args.model)
+    fp16_path = convert_to_fp16_gguf(model_dir)
 
-    # Step 3: Convert to FP16 GGUF
-    fp16_path = convert_to_fp16_gguf(model_dir, convert_script)
-
-    # Step 3b: [Colab mode] Delete source model files to free disk space
     if args.delete_src:
         print()
         print_step("info", "--delete-src: removing source model files to free disk...")
-        import shutil as _shutil
-        _shutil.rmtree(str(model_dir))
         freed = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file()) if model_dir.exists() else 0
-        print_step("ok", f"Source files deleted — disk freed")
-    # Step 4: Quantize to each target format
+        shutil.rmtree(str(model_dir))
+        print_step("ok", f"Source files deleted — freed {freed / (1024**3):.1f} GB")
+
+    imatrix_path = None
+    if requires_imatrix:
+        calib_file = Path(args.calibration) if args.calibration else Path("calibration_data.txt")
+        if not calib_file.exists():
+            print_step("warn", f"Calibration file {calib_file} not found. Skipping imatrix generation.")
+            print_step("info", "IQ quants will be generated without an imatrix (suboptimal).")
+        else:
+            imatrix_path = generate_imatrix(fp16_path, calib_file)
+
     created_quants = []
     print()
-    for quant_type in args.quants:
-        result = quantize_gguf(fp16_path, quant_type, quantize_bin)
+    for i, quant_type in enumerate(quants_this_run, 1):
+        print_step("info", f"--- [{i}/{len(quants_this_run)}] Starting {quant_type} ---")
+        result = quantize_gguf(fp16_path, quant_type, imatrix_path)
         if result:
             created_quants.append(result)
 
-    # Step 5: Clean up FP16 (large intermediate file)
-    # ONLY delete if at least one quant succeeded — keep it if all failed!
-    if created_quants and not args.keep_fp16 and fp16_path.exists():
+    # Only delete FP16 if ALL quants across ALL batches are now done
+    all_done_now = all(is_done(q) for q in all_quants)
+    if all_done_now and not args.keep_fp16 and fp16_path.exists():
         print()
-        print_step("info", f"Removing FP16 base file to save disk space...")
+        print_step("info", "All quants complete — removing FP16 base file to free disk...")
         fp16_path.unlink()
-        print_step("ok", "FP16 file removed")
-    elif not created_quants and fp16_path.exists():
+        print_step("ok", f"FP16 file removed")
+    elif not all_done_now and fp16_path.exists():
         print()
-        print_step("warn", "All quantizations failed — keeping FP16 file for retry")
-        print_step("info", f"FP16 file: {fp16_path}")
-        print_step("info", "Fix the error above, then re-run quantize.py (FP16 won't be re-created)")
+        print_step("info", f"FP16 kept — {len(remaining_after)} quant(s) still pending. Re-run to continue.")
 
-    # Summary
     print("\n" + "="*60)
     print("  Done! Created quants:")
     for q in created_quants:
         print(f"    • {q.name} ({get_size(q)})")
-    print()
-    print("  Next steps:")
-    print("    1. Run benchmark.py to measure performance")
-    print("    2. Run model_card.py to generate README")
-    print("    3. Run upload.py to publish to HuggingFace")
     print("="*60 + "\n")
-
 
 if __name__ == "__main__":
     main()

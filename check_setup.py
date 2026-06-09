@@ -11,9 +11,9 @@ Usage:
     python check_setup.py
 """
 
-import subprocess
 from pathlib import Path
-from config import LLAMA_QUANTIZE, LLAMA_CLI, CONVERT_SCRIPT, HF_TOKEN, LLAMA_CPP_DIR
+from config import LLAMA_QUANTIZE, LLAMA_CLI, LLAMA_BENCH, LLAMA_IMATRIX, CONVERT_SCRIPT, HF_TOKEN, IS_WINDOWS
+from utils import print_step
 
 OK   = "\033[92m[OK]\033[0m"
 FAIL = "\033[91m[FAIL]\033[0m"
@@ -27,7 +27,6 @@ def check(label: str, passed: bool, fix: str = ""):
         print(f"      {INFO} Fix: {fix}")
     return passed
 
-
 def main():
     print("\n" + "="*55)
     print("  quant-kit — Environment Check")
@@ -39,11 +38,7 @@ def main():
     print("[ Python ]")
     ver = sys.version_info
     ok = ver >= (3, 10)
-    all_ok &= check(
-        f"Python {ver.major}.{ver.minor}.{ver.micro}",
-        ok,
-        "Install Python 3.10 or newer from https://python.org"
-    )
+    all_ok &= check(f"Python {ver.major}.{ver.minor}.{ver.micro}", ok, "Install Python 3.10 or newer from https://python.org")
     print()
 
     # ── Python packages ────────────────────────────────────
@@ -67,24 +62,19 @@ def main():
 
     # ── llama.cpp binaries ──────────────────────────────────────────
     print("[ llama.cpp Binaries ]")
-
     release_url = "https://github.com/ggerganov/llama.cpp/releases/latest"
 
-    all_ok &= check(
-        f"llama-quantize.exe  ({LLAMA_QUANTIZE})",
-        LLAMA_QUANTIZE.exists(),
-        f"Download llama-b*-bin-win-vulkan-x64.zip from {release_url}"
-    )
-    all_ok &= check(
-        f"llama-cli.exe       ({LLAMA_CLI})",
-        LLAMA_CLI.exists(),
-        f"Same zip from {release_url}"
-    )
-    all_ok &= check(
-        f"convert_hf_to_gguf.py ({CONVERT_SCRIPT})",
-        CONVERT_SCRIPT.exists(),
-        "Download from: https://github.com/ggerganov/llama.cpp/blob/master/convert_hf_to_gguf.py"
-    )
+    binaries = [
+        ("llama-quantize", LLAMA_QUANTIZE, f"Download llama.cpp binaries from {release_url}"),
+        ("llama-cli", LLAMA_CLI, f"Download llama.cpp binaries from {release_url}"),
+        ("llama-bench", LLAMA_BENCH, f"Download llama.cpp binaries from {release_url}"),
+        ("llama-imatrix", LLAMA_IMATRIX, f"Download llama.cpp binaries from {release_url}"),
+        ("convert_hf_to_gguf.py", CONVERT_SCRIPT, "Download from llama.cpp repository"),
+    ]
+
+    for name, path, fix in binaries:
+        display_name = f"{name}.exe" if IS_WINDOWS and "convert" not in name else name
+        all_ok &= check(f"{display_name:<21} ({path})", path.exists(), fix)
     print()
 
     # ── HuggingFace token ──────────────────────────────────────────
@@ -107,24 +97,18 @@ def main():
     total, used, free = shutil.disk_usage(Path(__file__).parent)
     free_gb = free / (1024 ** 3)
     ok = free_gb >= 20
-    check(
-        f"Free disk space: {free_gb:.1f} GB {'(OK)' if ok else '(LOW — need at least 20 GB)'}",
-        ok,
-        "Free up disk space before downloading large models"
-    )
+    check(f"Free disk space: {free_gb:.1f} GB {'(OK)' if ok else '(LOW — need at least 20 GB)'}", ok, "Free up disk space before downloading large models")
     print()
 
     # ── Summary ────────────────────────────────────────────
     print("="*55)
     if all_ok:
         print(f"  {OK} All checks passed! You are ready to go.")
-        print()
-        print("  Start with:")
-        print("    python quantize.py --model Qwen/Qwen2.5-1.5B-Instruct")
+        print("\n  Start with:")
+        print("    python quantize.py --model google/gemma-4-12b-it")
     else:
         print(f"  {FAIL} Some checks failed. Fix the issues above first.")
     print("="*55 + "\n")
-
 
 if __name__ == "__main__":
     main()
