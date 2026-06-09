@@ -57,12 +57,21 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
     print(f"   File  : {gguf_path.name}  ({size_gb:.1f} GB)")
     print(f"   GPU   : {ngl} layers offloaded to VRAM")
     print(f"   Tasks : pp512 (prompt speed)  +  tg128 (generation speed)")
-    print(f"   Status: loading model... (no output until done — may take 5–15 min)")
-    import sys as _sys
-    _sys.stdout.flush()
+    print(f"   Status: loading model... (no output until done — may take 5–15 min)", flush=True)
 
     ram_before = psutil.virtual_memory().used / (1024 ** 2)
     start      = time.time()
+
+    cmd = [
+        str(LLAMA_BENCH),
+        "-m", str(gguf_path),
+        "-ngl", str(ngl),
+        "-t", "4",
+        "-p", "512",
+        "-n", "128",
+        "-r", "1",
+        "--output", "json",
+    ]
 
     # On Linux: set LD_LIBRARY_PATH so llama-bench finds its .so libraries
     env = os.environ.copy()
@@ -93,13 +102,14 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
         elapsed_live = time.time() - start
         print(f"\r   {spinner[tick % 4]}  Running... {elapsed_live:.0f}s elapsed", end="", flush=True)
         tick += 1
-        t.join(timeout=15)   # update every 15 seconds
+        t.join(timeout=15)
 
-    print()   # newline after spinner
+    print()  # newline after spinner
 
     if not stdout_buf:
         print_step("err", "Benchmark process did not return output")
-        return {"file": gguf_path.name, "error": "no output"}
+        return {"file": gguf_path.name, "size_gb": size_gb, "error": "no output",
+                "pp_tokens_per_sec": "N/A", "tg_tokens_per_sec": "N/A", "gpu_layers": ngl}
 
     result_stdout = stdout_buf[0]
     result_stderr = stderr_buf[0]
@@ -108,9 +118,8 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
     if return_code != 0:
         print_step("err", f"llama-bench exited with code {return_code}")
         print(result_stderr[:400] if result_stderr else "(no stderr)")
-        return {"file": gguf_path.name, "error": f"exit {return_code}"}
-
-
+        return {"file": gguf_path.name, "size_gb": size_gb, "error": f"exit {return_code}",
+                "pp_tokens_per_sec": "N/A", "tg_tokens_per_sec": "N/A", "gpu_layers": ngl}
 
 
     elapsed = time.time() - start
