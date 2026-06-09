@@ -25,9 +25,7 @@ import argparse
 import psutil
 import platform
 from pathlib import Path
-from config import OUTPUT_DIR, LLAMA_CPP_DIR
-
-LLAMA_BENCH = LLAMA_CPP_DIR / "llama-bench.exe"
+from config import OUTPUT_DIR, LLAMA_CPP_DIR, LLAMA_BENCH
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -44,14 +42,14 @@ def get_file_size_gb(path: Path) -> float:
 
 def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
     """
-    Run llama-bench.exe on a GGUF file.
+    Run llama-bench on a GGUF file.
     llama-bench outputs a markdown table with pp (prompt processing)
     and tg (token generation) speeds in tokens/sec.
 
     Example output:
       | model | size | params | backend | ngl | test  | t/s        |
-      | ...   | ...  | ...    | Vulkan  | 99  | pp512 | 245.6±1.2  |
-      | ...   | ...  | ...    | Vulkan  | 99  | tg128 |  18.3±0.1  |
+      | ...   | ...  | ...    | CUDA    | 99  | pp512 | 245.6±1.2  |
+      | ...   | ...  | ...    | CUDA    | 99  | tg128 |  18.3±0.1  |
     """
     print_step("info", f"Benchmarking {gguf_path.name}...")
 
@@ -69,13 +67,18 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
         "--output", "json",     # clean JSON output — easy to parse
     ]
 
+    # On Linux: set LD_LIBRARY_PATH so llama-bench finds its .so libraries
+    env = os.environ.copy()
+    env["LD_LIBRARY_PATH"] = str(LLAMA_CPP_DIR) + ":" + env.get("LD_LIBRARY_PATH", "")
+
     try:
         result = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,     # discard noisy stderr logs
+            stderr=subprocess.PIPE,
             timeout=300,
             text=True,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         print_step("warn", "Benchmark timed out after 5 minutes — skipping")
@@ -83,6 +86,7 @@ def benchmark_gguf(gguf_path: Path, ngl: int = 99) -> dict:
     except Exception as e:
         print_step("err", f"Benchmark failed: {e}")
         return {"file": gguf_path.name, "error": str(e)}
+
 
     elapsed = time.time() - start
     ram_after = psutil.virtual_memory().used / (1024 ** 2)
@@ -158,8 +162,8 @@ def main():
     args = parser.parse_args()
 
     if not LLAMA_BENCH.exists():
-        print_step("err", f"llama-bench.exe not found at {LLAMA_BENCH}")
-        print_step("info", "It should be inside your llama.cpp/ folder from the Vulkan zip")
+        print_step("err", f"llama-bench not found at: {LLAMA_BENCH}")
+        print_step("info", "Run: python setup_linux.py  (or Cell 2 in the notebook)")
         sys.exit(1)
 
     model_output_dir = OUTPUT_DIR / args.model
