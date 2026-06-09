@@ -73,13 +73,51 @@ def install_python_deps():
 def check_cuda() -> bool:
     result = subprocess.run("nvidia-smi", shell=True, capture_output=True, text=True)
     if result.returncode == 0:
-        # Extract GPU name
-        lines = [l for l in result.stdout.splitlines() if "%" in l or "MiB" in l]
-        gpu_line = result.stdout.split("\n")[8] if len(result.stdout.split("\n")) > 8 else ""
         ok(f"CUDA GPU detected")
         return True
     warn("No CUDA GPU detected — using CPU build (slower quantization)")
     return False
+
+
+def install_gpu_deps(has_cuda: bool):
+    """Install llama-cpp-python with CUDA support for GPU benchmarking.
+    Uses pre-built wheels — no compilation needed (~2 min download)."""
+    if not has_cuda:
+        return
+
+    header("Installing llama-cpp-python with CUDA (for GPU benchmarking)...")
+
+    # Detect CUDA version for correct wheel
+    nvcc = subprocess.run("nvcc --version", shell=True, capture_output=True, text=True)
+    cuda_ver = "cu124"   # Colab default (CUDA 12.4)
+    if nvcc.returncode == 0:
+        for line in nvcc.stdout.splitlines():
+            if "release" in line.lower():
+                import re
+                m = re.search(r"release (\d+)\.(\d+)", line)
+                if m:
+                    major, minor = m.group(1), m.group(2)
+                    cuda_ver = f"cu{major}{minor}"
+                    break
+
+    wheel_url = f"https://abetlen.github.io/llama-cpp-python/whl/{cuda_ver}"
+    cmd = (f"{sys.executable} -m pip install llama-cpp-python "
+           f"--extra-index-url {wheel_url} -q --force-reinstall")
+
+    result = subprocess.run(cmd, shell=True)
+    if result.returncode == 0:
+        ok(f"llama-cpp-python (CUDA/{cuda_ver}) installed — GPU benchmarking enabled")
+    else:
+        warn("CUDA wheel failed — trying source build (may take 15 min)...")
+        src_cmd = (
+            f"CMAKE_ARGS='-DGGML_CUDA=on' "
+            f"{sys.executable} -m pip install llama-cpp-python --force-reinstall -q"
+        )
+        r2 = subprocess.run(src_cmd, shell=True)
+        if r2.returncode == 0:
+            ok("llama-cpp-python (CUDA, built from source) installed")
+        else:
+            warn("Could not install CUDA support — benchmarks will run on CPU")
 
 
 # ─── Step 4: Download llama.cpp binaries ──────────────────────────────────────
@@ -319,6 +357,9 @@ def main():
     print()
 
     has_cuda = check_cuda()
+    print()
+
+    install_gpu_deps(has_cuda)
     print()
 
     download_binaries(has_cuda)
