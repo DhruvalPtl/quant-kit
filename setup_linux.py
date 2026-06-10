@@ -73,12 +73,13 @@ def install_python_deps():
 def check_cuda() -> bool:
     result = subprocess.run("nvidia-smi", shell=True, capture_output=True, text=True)
     if result.returncode == 0:
+        # Extract GPU name
+        lines = [l for l in result.stdout.splitlines() if "%" in l or "MiB" in l]
+        gpu_line = result.stdout.split("\n")[8] if len(result.stdout.split("\n")) > 8 else ""
         ok(f"CUDA GPU detected")
         return True
     warn("No CUDA GPU detected — using CPU build (slower quantization)")
     return False
-
-
 
 
 # ─── Step 4: Download llama.cpp binaries ──────────────────────────────────────
