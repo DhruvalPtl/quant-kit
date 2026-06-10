@@ -35,6 +35,16 @@ LLAMA_SRC_DIR = ROOT_DIR / "llama-src"     # llama.cpp Python source (convert sc
 MODELS_DIR    = ROOT_DIR / "models"
 OUTPUT_DIR    = ROOT_DIR / "output"
 
+# stable-diffusion.cpp — for SD / SDXL / SD3 / FLUX quantization
+SD_CPP_DIR    = ROOT_DIR / "stable-diffusion.cpp"
+SD_BINARY     = SD_CPP_DIR / f"sd{EXE}"
+
+# whisper.cpp — for Whisper ASR quantization
+WHISPER_CPP_DIR      = ROOT_DIR / "whisper.cpp"
+WHISPER_BINARY       = WHISPER_CPP_DIR / f"main{EXE}"
+WHISPER_QUANTIZE     = WHISPER_CPP_DIR / f"quantize{EXE}"
+WHISPER_CONVERT_SCRIPT = WHISPER_CPP_DIR / "models" / "convert-h5-to-ggml.py"
+
 # ── llama.cpp binaries ─────────────────────────────────────────────────────────
 # Works on both Windows (.exe) and Linux (no extension)
 LLAMA_QUANTIZE   = LLAMA_CPP_DIR / f"llama-quantize{EXE}"
