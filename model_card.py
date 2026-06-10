@@ -97,7 +97,11 @@ def build_kaggle_table(kaggle_data: dict) -> str:
         return ""
     platform = kaggle_data.get("platform", "T4 GPU")
     quant    = kaggle_data.get("quant", "?")
-    ppl      = kaggle_data.get("perplexity")
+
+    # Only show PPL if flagged as reliable (perplexity_reliable=True).
+    # Gemma 4's SWA architecture produces bogus PPL from chunk-based logits_all.
+    ppl_reliable = kaggle_data.get("perplexity_reliable", True)   # legacy: assume reliable if key absent
+    ppl          = kaggle_data.get("perplexity") if ppl_reliable else None
 
     rows  = f"*Benchmarked on `{quant}` using **{platform}***\n\n"
     if ppl:
@@ -105,15 +109,16 @@ def build_kaggle_table(kaggle_data: dict) -> str:
     rows += "| Benchmark | Score | Description |\n|---|---|---|\n"
 
     TASK_META = {
-        "truthfulqa_mc2":  ("TruthfulQA",    "Resistance to hallucination"),
-        "gpqa_diamond":    ("GPQA Diamond",   "Hard science reasoning (PhD-level)"),
-        "arc_challenge":   ("ARC Challenge",  "Grade-school science reasoning"),
-        "hellaswag":       ("HellaSwag",      "Common sense completion"),
-        "gsm8k":           ("GSM8K",          "Grade-school math"),
-        "winogrande":      ("Winogrande",     "Commonsense pronoun resolution"),
+        "truthfulqa_mc2":  ("TruthfulQA MC2",  "Truthfulness / hallucination resistance"),
+        "arc_challenge":   ("ARC Challenge",    "Grade-school science reasoning (MC)"),
+        "hellaswag":       ("HellaSwag",         "Commonsense completion (MC)"),
+        "winogrande":      ("Winogrande",        "Commonsense pronoun resolution (MC)"),
+        "gsm8k":           ("GSM8K",             "Grade-school math (exact match)"),
+        "ifeval":          ("IFEval",            "Instruction-following accuracy"),
+        "gpqa_diamond":    ("GPQA Diamond",      "PhD-level science reasoning"),
     }
     for task, score in kaggle_data["benchmarks"].items():
-        name, desc = TASK_META.get(task, (task, ""))
+        name, desc = TASK_META.get(task, (task.replace("_", " ").title(), ""))
         rows += f"| **{name}** | `{score}%` | {desc} |\n"
     return rows
 
@@ -129,13 +134,19 @@ def build_vastai_table(vastai_data: dict) -> str:
     rows += "| Benchmark | Score | Description |\n|---|---|---|\n"
 
     TASK_META = {
-        "mmlu_pro":   ("MMLU Pro",    "Massive Multitask Language Understanding (Pro)"),
-        "aime24":     ("AIME 2024",   "American Invitational Mathematics Examination"),
-        "humaneval":  ("HumanEval",   "Code generation (pass@1)"),
-        "math_500":   ("MATH-500",    "Competition mathematics"),
+        "truthfulqa_mc2":  ("TruthfulQA MC2",  "Truthfulness / hallucination resistance"),
+        "arc_challenge":   ("ARC Challenge",    "Grade-school science reasoning (MC)"),
+        "hellaswag":       ("HellaSwag",         "Commonsense completion (MC)"),
+        "winogrande":      ("Winogrande",        "Commonsense pronoun resolution (MC)"),
+        "mmlu_pro":        ("MMLU Pro",          "57-subject knowledge benchmark"),
+        "gsm8k":           ("GSM8K",             "Grade-school math (exact match)"),
+        "ifeval":          ("IFEval",            "Instruction-following accuracy"),
+        "humaneval":       ("HumanEval",         "Code generation (pass@1)"),
+        "aime24":          ("AIME 2024",         "Competition mathematics"),
+        "math_500":        ("MATH-500",          "Competition mathematics"),
     }
     for task, score in vastai_data["benchmarks"].items():
-        name, desc = TASK_META.get(task, (task, ""))
+        name, desc = TASK_META.get(task, (task.replace("_", " ").title(), ""))
         rows += f"| **{name}** | `{score}%` | {desc} |\n"
     return rows
 
