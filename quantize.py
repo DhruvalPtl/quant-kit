@@ -124,10 +124,6 @@ def download_model(model_id: str, skip_preflight: bool = False) -> Path:
     model_name = model_id.split("/")[-1]
     local_dir = MODELS_DIR / model_name
 
-    if local_dir.exists() and any(local_dir.iterdir()):
-        print_step("ok", f"Model already downloaded: {local_dir}")
-        return local_dir
-
     # 🛡️ Pre-flight: verify architecture BEFORE downloading gigabytes
     if not skip_preflight:
         preflight_check(model_id)
@@ -258,7 +254,9 @@ def quantize_gguf(fp16_path: Path, quant_type: str, imatrix_path: Path = None) -
 
     if result.returncode != 0:
         print_step("err", f"Quantization to {quant_type} failed! (exit code {result.returncode})")
-        return None
+        if output_path.exists():
+            output_path.unlink()  # Delete the corrupted partial file
+        sys.exit(1)
 
     elapsed = time.time() - start
     print_step("ok", f"{quant_type} done in {elapsed:.1f}s → {output_path.name} ({get_size(output_path)})")
