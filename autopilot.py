@@ -343,6 +343,7 @@ Examples:
         print("  " + "─" * 60)
         candidates = [{
             "model_id": args.model,
+            "model_name": args.model.split("/")[-1],
             "size_gb": 5.0, # fallback
             "downloads": 0,
             "likes": 0,
