@@ -284,6 +284,8 @@ Examples:
     )
     parser.add_argument("--count",         "-n", type=int, default=3,
                         help="How many models to quantize (default: 3)")
+    parser.add_argument("--model",         type=str,
+                        help="Skip discovery and run autopilot on a specific model ID (e.g. Qwen/Qwen3-4B-Instruct-2507)")
     parser.add_argument("--max-gb",        type=float, default=15.0,
                         help="Max model download size in GB (default: 15.0)")
     parser.add_argument("--min-downloads", type=int,   default=500,
@@ -335,22 +337,35 @@ Examples:
     # ─── Discovery ────────────────────────────────────────────────────────────
     print()
     print("  " + "─" * 60)
-    print("  🔍 STEP 1 — Discovering candidates...")
-    print("  " + "─" * 60)
-    print()
+    
+    if args.model:
+        print(f"  🎯 TARGET MODE — skipping discovery to process: {args.model}")
+        print("  " + "─" * 60)
+        candidates = [{
+            "model_id": args.model,
+            "size_gb": 5.0, # fallback
+            "downloads": 0,
+            "likes": 0,
+            "model_type": "llm",
+            "architecture": "unknown"
+        }]
+    else:
+        print("  🔍 STEP 1 — Discovering candidates...")
+        print("  " + "─" * 60)
+        print()
 
-    # Fetch 5x more than needed — stricter filters mean fewer pass through
-    fetch_count = args.count * 5
-    candidates = discover(
-        task=args.task,
-        max_gb=args.max_gb,
-        min_downloads=args.min_downloads,
-        min_likes=args.min_likes,
-        my_username="Dhptl",
-        count=fetch_count,
-        token=HF_TOKEN,
-        verbose=True,
-    )
+        # Fetch 5x more than needed — stricter filters mean fewer pass through
+        fetch_count = args.count * 5
+        candidates = discover(
+            task=args.task,
+            max_gb=args.max_gb,
+            min_downloads=args.min_downloads,
+            min_likes=args.min_likes,
+            my_username="Dhptl",
+            count=fetch_count,
+            token=HF_TOKEN,
+            verbose=True,
+        )
 
     # Filter out already-done models
     new_candidates = [c for c in candidates if c["model_id"] not in already_done]
