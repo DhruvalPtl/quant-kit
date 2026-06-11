@@ -34,7 +34,53 @@ from utils import print_step
 MAJOR_QUANTIZERS = {
     "bartowski", "mradermacher", "unsloth", "QuantFactory",
     "TheBloke", "lmstudio-community", "mlx-community",
-    "second-state", "MaziyarPanahi",
+    "second-state", "MaziyarPanahi", "ggml-org",
+}
+
+# ── Orgs that only publish test/derivative models (never original weights) ────
+SKIP_ORGS = {
+    "trl-internal-testing", "peft-internal-testing",
+    "hf-internal-testing", "Narsil", "fxmarty",
+    "unsloth",          # derivative (fine-tunes + quants, not originals)
+    "mlx-community",    # MLX-converted, not original weights
+    "casperhansen",     # AWQ variants only
+    "hugging-quants",   # quantized variants only
+    "lmstudio-community",  # derivative
+    "second-state",     # GGUF variants
+}
+
+# ── Keywords in model NAME that indicate it's NOT original weights ─────────────
+SKIP_NAME_KEYWORDS = {
+    # Quantization formats (not original FP16/BF16 weights)
+    "awq", "gptq", "fp8", "fp4", "int4", "int8",
+    "bnb", "4bit", "8bit", "nvfp4", "mxfp4", "w4a16",
+    # Derivative types
+    "mlx", "gguf", "ggml", "exl2", "exllamav2",
+    # Test/random models
+    "tiny", "random", "test", "dummy", "mock", "example",
+    # Fine-tune indicators that pollute results
+    "abliterated", "uncensored",
+}
+
+# ── Specific model IDs that are known to fail conversion ──────────────────
+SKIP_MODEL_IDS = {
+    # Broken tokenizers / bad configs
+    "openai-community/gpt2",
+    "openai-community/gpt2-medium",
+    "openai-community/gpt2-large",
+    "openai-community/gpt2-xl",
+    "facebook/opt-125m",
+    "facebook/opt-350m",
+    "facebook/opt-1.3b",
+    "facebook/opt-2.7b",
+    # Oversaturated classics (TheBloke has 100+ variants)
+    "meta-llama/Llama-2-7b-hf",
+    "meta-llama/Llama-2-13b-hf",
+    "tiiuae/falcon-7b",
+    "bigscience/bloom-560m",
+    "bigscience/bloom",
+    "EleutherAI/gpt-j-6b",
+    "EleutherAI/pythia-2.8b",
 }
 
 # ─── MMPROJ architectures (VLM) ───────────────────────────────────────────────
@@ -166,6 +212,7 @@ def discover(
     task: str = "text-generation",
     max_gb: float = 15.0,
     min_downloads: int = 500,
+    min_likes: int = 5,
     count: int = 5,
     token: str | None = None,
     verbose: bool = True,
@@ -186,10 +233,11 @@ def discover(
     if verbose:
         print_step("info", f"Querying HuggingFace models (task={task}, sort=downloads+likes)...")
 
-    # HF API REST endpoint — fetch_config param is not supported, so we
-    # download config.json individually for each candidate (only ~2KB each)
+    # Sort by likes — much more reliable than downloads.
+    # Downloads are inflated by CI/CD bots and pip install tutorials.
+    # Likes = real human interest in the model.
     models = hf_get({
-        "sort":     "downloads",
+        "sort":     "likes",
         "limit":    200,
         "pipeline_tag": task,
         "full":     "true",
@@ -211,25 +259,41 @@ def discover(
         downloads  = model_info.get("downloads", 0) or 0
         likes      = model_info.get("likes", 0) or 0
 
-        # ── Filter 1: minimum download threshold ─────────────────────────────
+        # ── Filter 1: minimum download threshold ────────────────────────────
         if downloads < min_downloads:
             continue
 
-        # ── Filter 2: skip if already GGUF (repo name contains GGUF) ───────
-        if "gguf" in model_name.lower() or "gguf" in model_id.lower():
+        # ── Filter 2: known-bad specific model IDs ───────────────────────────
+        if model_id in SKIP_MODEL_IDS:
             continue
 
-        # ── Filter 3: size must fit on laptop ──────────────────────────────
+        # ── Filter 3: skip bad orgs (test repos, derivative-only publishers) ─
+        org = model_id.split("/")[0] if "/" in model_id else ""
+        if org in SKIP_ORGS:
+            continue
+
+        # ── Filter 4: skip quantized/derivative model names ──────────────────
+        name_lower = model_name.lower()
+        if any(kw in name_lower for kw in SKIP_NAME_KEYWORDS):
+            continue
+
+        # ── Filter 5: skip if already GGUF in repo name ──────────────────────
+        if "gguf" in name_lower or "gguf" in model_id.lower():
+            continue
+
+        # ── Filter 6: require minimum likes (weeds out test/junk repos) ──────
+        if likes < min_likes:
+            continue
+
+        # ── Filter 6: size must fit on laptop ─────────────────────────────────
         st = model_info.get("safetensors") or {}
         total_params = st.get("total", 0) if isinstance(st, dict) else 0
         size_gb = (total_params * 2) / (1024 ** 3) if total_params else None
 
         if size_gb is not None and size_gb > max_gb:
-            if verbose:
-                print(f"    skip {model_id} ({size_gb:.1f} GB > {max_gb} GB limit)")
-            continue
+            continue  # too large
         if size_gb is None:
-            size_gb = 0.0  # unknown size — allow through, label as unknown
+            size_gb = 0.0  # unknown — allow through (size checked again pre-download)
 
         # ── Filter 4: fetch architecture (config.json, ~2KB only) ───────────
         checked += 1
@@ -277,7 +341,7 @@ def discover(
             "downloads":     downloads,
             "likes":         likes,
             "gguf_repos":    gguf_count,
-            "gguf_existing": exact_matches,
+            "gguf_existing": existing_repos,
             "score":         s,
         })
 

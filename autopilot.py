@@ -184,12 +184,21 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
         log_event(log, "failed", model_id, {"step": "quantize"})
         return False
 
-    # Check output actually exists
+    # Check output actually exists — and that it has real QUANTS (not just F16)
     output_dir = OUTPUT_DIR / model_name
-    gguf_files = list(output_dir.glob("*.gguf")) if output_dir.exists() else []
-    if not gguf_files:
-        print_step("err", f"No GGUF files found in {output_dir} — quantization may have failed silently")
+    all_gguf   = list(output_dir.glob("*.gguf")) if output_dir.exists() else []
+    gguf_files = [f for f in all_gguf if "-F16.gguf" not in f.name and "-mmproj-" not in f.name]
+
+    if not all_gguf:
+        print_step("err", f"No GGUF files found in {output_dir} — quantization failed")
         log_event(log, "failed", model_id, {"step": "quantize", "reason": "no output files"})
+        return False
+
+    if not gguf_files:
+        print_step("err", f"Only F16 found — model may be too small or tokenizer incompatible")
+        print_step("info", f"Cleaning up...")
+        shutil.rmtree(str(output_dir), ignore_errors=True)
+        log_event(log, "failed", model_id, {"step": "quantize", "reason": "no quants, only F16"})
         return False
 
     print()
@@ -268,6 +277,8 @@ Examples:
                         help="Discover and plan only — no actual quantization or upload")
     parser.add_argument("--stop-gb",       type=float, default=10.0,
                         help="Stop if free disk drops below this GB (default: 10.0)")
+    parser.add_argument("--min-likes",     type=int,   default=5,
+                        help="Minimum likes on HF to consider (default: 5, filters test repos)")
     args = parser.parse_args()
 
     log = load_log()
@@ -308,12 +319,13 @@ Examples:
     print("  " + "─" * 60)
     print()
 
-    # Fetch more than needed in case some are already done
-    fetch_count = args.count * 3
+    # Fetch 5x more than needed — stricter filters mean fewer pass through
+    fetch_count = args.count * 5
     candidates = discover(
         task=args.task,
         max_gb=args.max_gb,
         min_downloads=args.min_downloads,
+        min_likes=args.min_likes,
         count=fetch_count,
         token=HF_TOKEN,
         verbose=True,
