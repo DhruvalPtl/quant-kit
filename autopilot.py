@@ -347,7 +347,9 @@ Examples:
             "downloads": 0,
             "likes": 0,
             "model_type": "llm",
-            "architecture": "unknown"
+            "architecture": "unknown",
+            "gguf_repos": 0,
+            "has_major": False
         }]
     else:
         print("  🔍 STEP 1 — Discovering candidates...")
