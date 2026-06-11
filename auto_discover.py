@@ -81,6 +81,13 @@ SKIP_MODEL_IDS = {
     "bigscience/bloom",
     "EleutherAI/gpt-j-6b",
     "EleutherAI/pythia-2.8b",
+    # Gated models requiring Meta license approval
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "meta-llama/Llama-3.1-8B",
+    "meta-llama/Llama-3.2-1B-Instruct",
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "meta-llama/Meta-Llama-3-8B-Instruct",
+    "meta-llama/Meta-Llama-3-8B",
 }
 
 # ─── MMPROJ architectures (VLM) ───────────────────────────────────────────────
@@ -153,7 +160,7 @@ def get_supported_architectures() -> set[str]:
 def fetch_architecture(model_id: str, token: str | None = None) -> str | None:
     """
     Download only config.json (~2KB) to get the architecture.
-    Much more reliable than the REST API config field.
+    Returns None if can't access, 'GATED' if repo is restricted (403).
     """
     try:
         cfg_path = hf_hub_download(
@@ -166,7 +173,10 @@ def fetch_architecture(model_id: str, token: str | None = None) -> str | None:
             cfg = json.load(f)
         archs = cfg.get("architectures", [])
         return archs[0] if archs else None
-    except Exception:
+    except Exception as e:
+        err = str(e)
+        if "403" in err or "gated" in err.lower() or "restricted" in err.lower():
+            return "GATED"
         return None
 
 
@@ -333,8 +343,16 @@ def discover(
             print(f"    {tag_prefix} {model_id} ({sz_label}, {downloads:,} dl)", end=" ", flush=True)
 
         arch = fetch_architecture(model_id, token)
+        if arch == "GATED":
+            if verbose: print("-> gated/restricted repo, skip")
+            continue
         if not arch:
             if verbose: print("-> no arch in config, skip")
+            continue
+
+        # Also skip if API explicitly marks model as gated
+        if model_info.get("gated") and model_info.get("gated") != False:
+            if verbose: print("-> gated model, skip")
             continue
 
         # Determine model type
