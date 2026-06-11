@@ -277,7 +277,7 @@ def discover(
             "downloads":     downloads,
             "likes":         likes,
             "gguf_repos":    gguf_count,
-            "gguf_existing": exact_matches,
+            "gguf_existing": existing_repos,
             "score":         s,
         })
 
