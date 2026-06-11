@@ -326,6 +326,7 @@ Examples:
         max_gb=args.max_gb,
         min_downloads=args.min_downloads,
         min_likes=args.min_likes,
+        my_username="Dhptl",
         count=fetch_count,
         token=HF_TOKEN,
         verbose=True,
@@ -352,10 +353,17 @@ Examples:
     print("  " + "═" * 60)
     total_size = sum(c["size_gb"] for c in candidates)
     for i, c in enumerate(candidates, 1):
-        gap  = "🟢 NO GGUF" if c["gguf_repos"] == 0 else f"🟡 {c['gguf_repos']} partial"
+        n = c["gguf_repos"]
+        if n == 0:
+            gap = "🟢 ZERO GGUF — first mover!"
+        elif not c.get("has_major"):
+            gap = f"🟡 {n} small repos — open gap"
+        else:
+            gap = f"🟠 {n} repos incl. majors — add to your collection"
         tag  = "VLM" if c["model_type"] == "vlm" else "LLM"
         print(f"  {i}. [{tag}] {c['model_id']}")
-        print(f"     {c['size_gb']:.1f} GB | {c['downloads']:,} downloads | {c['likes']} likes | {gap}")
+        print(f"     {c['size_gb']:.1f} GB | {c['downloads']:,} downloads | {c['likes']} likes")
+        print(f"     {gap}")
     print(f"\n  Total download: ~{total_size:.1f} GB")
     print(f"  Estimated time: ~{len(candidates) * 30:.0f}-{len(candidates) * 90:.0f} min")
 

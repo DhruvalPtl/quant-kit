@@ -170,42 +170,71 @@ def fetch_architecture(model_id: str, token: str | None = None) -> str | None:
         return None
 
 
-def check_gguf_exists(model_name: str, token: str | None = None) -> tuple[bool, list[str]]:
+def check_gguf_coverage(
+    model_name: str,
+    my_username: str,
+    token: str | None = None,
+) -> dict:
     """
-    Search HuggingFace for existing GGUF repos for this model.
-    Uses exact model name matching to avoid false positives.
-    Returns (is_saturated, [existing_repo_ids])
+    Check GGUF coverage for a model.
+    Returns dict with:
+      - already_mine: bool   (you already published this — skip it)
+      - gguf_count: int      (how many external GGUF repos exist)
+      - existing: list[str]  (repo IDs found)
+      - has_major: bool      (bartowski/TheBloke etc. have it)
     """
     results = hf_get(
-        {"search": f"{model_name} GGUF", "limit": 15, "full": "false"},
+        {"search": f"{model_name} GGUF", "limit": 20, "full": "false"},
         token=token,
     )
     if not results:
-        return False, []
+        return {"already_mine": False, "gguf_count": 0,
+                "existing": [], "has_major": False}
 
-    # Only count repos that actually contain this specific model name
     model_lower = model_name.lower()
     exact_matches = [
         r.get("id", "") for r in results
         if model_lower in r.get("id", "").lower()
     ]
 
-    saturated = any(
+    # Check if YOU already have it published
+    my_repo = f"{my_username}/{model_name}-GGUF".lower()
+    already_mine = any(r.lower() == my_repo for r in exact_matches)
+
+    # Check if major quantizers have it
+    has_major = any(
         any(q.lower() in repo.lower() for q in MAJOR_QUANTIZERS)
         for repo in exact_matches
     )
-    return saturated, exact_matches
+
+    return {
+        "already_mine": already_mine,
+        "gguf_count":   len(exact_matches),
+        "existing":     exact_matches,
+        "has_major":    has_major,
+    }
 
 
-def score_model(model_info: dict, gguf_count: int) -> float:
+def score_model(model_info: dict, coverage: dict) -> float:
     """
-    Score a candidate model. Higher = better opportunity.
-    Formula: downloads + (likes * 100) - (gguf_repos * 5000)
+    Score a candidate. Higher = better opportunity for YOUR repo.
+
+    Tiers:
+      ZERO GGUF anywhere     → massive bonus  (first mover!)
+      Has GGUFs but no major → good opportunity
+      Has major quantizer    → still worth doing for repo growth
     """
     downloads = model_info.get("downloads", 0) or 0
     likes     = model_info.get("likes", 0) or 0
-    score     = downloads + (likes * 100) - (gguf_count * 5000)
-    return score
+    n         = coverage["gguf_count"]
+    has_major = coverage["has_major"]
+
+    base  = downloads + (likes * 100)
+    # Penalty per existing GGUF repo (diminishing opportunity)
+    penalty = n * 2000
+    # Bonus for first-mover
+    bonus = 50_000 if n == 0 else (10_000 if not has_major else 0)
+    return base + bonus - penalty
 
 
 def discover(
@@ -213,6 +242,7 @@ def discover(
     max_gb: float = 15.0,
     min_downloads: int = 500,
     min_likes: int = 5,
+    my_username: str = "Dhptl",
     count: int = 5,
     token: str | None = None,
     verbose: bool = True,
@@ -318,20 +348,30 @@ def discover(
             if verbose: print(f"-> unsupported arch ({arch}), skip")
             continue
 
-        # ── Filter 5: check GGUF saturation (exact model name match) ────────
+        # ── Check GGUF coverage — only skip if YOU already published it ─────
         if verbose: print(f"-> {model_type.upper()} [{arch}] checking GGUF...", end=" ", flush=True)
 
-        saturated, existing_repos = check_gguf_exists(model_name, token)
-        gguf_count = len(existing_repos)
+        coverage = check_gguf_coverage(model_name, my_username, token)
 
-        if saturated:
-            if verbose:
-                publishers = [r.split("/")[0] for r in existing_repos[:3]]
-                print(f"SATURATED by: {', '.join(publishers)}")
+        # Only real skip: you already have this model published
+        if coverage["already_mine"]:
+            if verbose: print(f"ALREADY IN YOUR REPO -> skip")
             continue
 
-        # ── Passed all filters — compute score ────────────────────────────────
-        s = score_model(model_info, gguf_count)
+        # ── Passed all filters — compute score ───────────────────────────────
+        s = score_model(model_info, coverage)
+        gguf_count = coverage["gguf_count"]
+
+        # Determine opportunity tier for display
+        if gguf_count == 0:
+            tier = "[ZERO GGUF] FIRST MOVER!"
+        elif not coverage["has_major"]:
+            tier = f"[{gguf_count} small repos] OPEN GAP"
+        else:
+            major_names = [r.split('/')[0] for r in coverage['existing']
+                           if any(q.lower() in r.lower() for q in MAJOR_QUANTIZERS)][:2]
+            tier = f"[{gguf_count} repos incl. {', '.join(major_names)}] BUILD YOUR REPO"
+
         candidates.append({
             "model_id":      model_id,
             "model_name":    model_name,
@@ -341,13 +381,13 @@ def discover(
             "downloads":     downloads,
             "likes":         likes,
             "gguf_repos":    gguf_count,
-            "gguf_existing": existing_repos,
+            "gguf_existing": coverage["existing"],
+            "has_major":     coverage["has_major"],
             "score":         s,
         })
 
         if verbose:
-            gap = "ZERO GGUF" if gguf_count == 0 else f"{gguf_count} partial"
-            print(f"OPEN! ({gap}) -> score={s:,.0f} ** CANDIDATE **")
+            print(f"{tier} -> score={s:,.0f}")
 
         time.sleep(0.4)
 
