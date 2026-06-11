@@ -73,6 +73,7 @@ SKIP_MODEL_IDS = {
     "facebook/opt-350m",
     "facebook/opt-1.3b",
     "facebook/opt-2.7b",
+    "openai/gpt-oss-20b", # uses mxfp4 which is disabled
     # Oversaturated classics (TheBloke has 100+ variants)
     "meta-llama/Llama-2-7b-hf",
     "meta-llama/Llama-2-13b-hf",
@@ -328,12 +329,10 @@ def discover(
         # ── Filter 6: size must fit on laptop ─────────────────────────────────
         st = model_info.get("safetensors") or {}
         total_params = st.get("total", 0) if isinstance(st, dict) else 0
-        size_gb = (total_params * 2) / (1024 ** 3) if total_params else None
+        size_gb = (total_params * 2) / (1024 ** 3) if total_params else 0.0
 
-        if size_gb is not None and size_gb > max_gb:
+        if size_gb > 0 and max_gb and size_gb > max_gb:
             continue  # too large
-        if size_gb is None:
-            size_gb = 0.0  # unknown — allow through (size checked again pre-download)
 
         # ── Filter 4: fetch architecture (config.json, ~2KB only) ───────────
         checked += 1
@@ -365,6 +364,22 @@ def discover(
         else:
             if verbose: print(f"-> unsupported arch ({arch}), skip")
             continue
+
+        # ── Verify actual size if missing from safetensors dict (e.g. DeepSeek-R1) ──
+        if size_gb == 0.0:
+            if verbose: print("-> checking real size...", end=" ", flush=True)
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi(token=token)
+                info = api.model_info(model_id, files_metadata=True)
+                total_bytes = sum(f.size for f in info.siblings if f.size is not None and (f.rfilename.endswith('.safetensors') or f.rfilename.endswith('.bin')))
+                size_gb = total_bytes / (1024 ** 3)
+                if max_gb and size_gb > max_gb:
+                    if verbose: print(f"too large ({size_gb:.1f} GB > {max_gb} GB), skip")
+                    continue
+                if verbose: print(f"({size_gb:.1f} GB)", end=" ")
+            except Exception:
+                pass
 
         # ── Check GGUF coverage — only skip if YOU already published it ─────
         if verbose: print(f"-> {model_type.upper()} [{arch}] checking GGUF...", end=" ", flush=True)
