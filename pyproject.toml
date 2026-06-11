@@ -39,3 +39,6 @@ quant-kit = "quantize:main"
 [project.urls]
 Homepage = "https://github.com/DhruvalPtl/quant-kit"
 Issues = "https://github.com/DhruvalPtl/quant-kit/issues"
+
+[tool.hatch.build.targets.wheel]
+include = ["*.py"]
