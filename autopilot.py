@@ -17,7 +17,10 @@ Usage:
 
 import sys
 import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+# Only wrap stdout if running in a real terminal (not redirected)
+# The wrapper was causing double-output when piped through PowerShell
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf8'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 import json
 import shutil
@@ -201,6 +204,21 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
         log_event(log, "failed", model_id, {"step": "quantize", "reason": "no quants, only F16"})
         return False
 
+    # Validate quant sizes — flag any suspiciously small file (disk-full truncation)
+    bad_files = [f for f in gguf_files if f.stat().st_size < 1024 * 1024]  # < 1 MB
+    if bad_files:
+        print()
+        print_step("warn", f"{len(bad_files)} quant file(s) look corrupt (< 1MB, disk was likely full):")
+        for f in bad_files:
+            print(f"     ⚠️  {f.name} ({f.stat().st_size / 1024:.0f} KB) — REMOVING")
+            f.unlink()  # delete corrupt file before upload
+        gguf_files = [f for f in gguf_files if f.stat().st_size >= 1024 * 1024]
+        if not gguf_files:
+            print_step("err", "All quants were corrupt — aborting")
+            shutil.rmtree(str(output_dir), ignore_errors=True)
+            log_event(log, "failed", model_id, {"step": "quantize", "reason": "all quants corrupt"})
+            return False
+
     print()
     print(f"  📦 Quants created ({len(gguf_files)}):")
     for f in sorted(gguf_files):
@@ -230,13 +248,15 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
         log_event(log, "failed", model_id, {"step": "upload"})
         return False
 
-    # ── Cleanup output to free space ──────────────────────────────────────────
+    # ── Auto-cleanup output folder to free space ──────────────────────────────
     output_size = used_gb_dir(output_dir)
     print()
-    print(f"  🧹 Output folder: {output_size:.1f} GB (keeping for now)")
-    print(f"     To free space: Remove-Item output\\{model_name} -Recurse -Force")
+    print(f"  🧹 Auto-cleaning output folder ({output_size:.1f} GB) to free disk space...")
+    shutil.rmtree(str(output_dir), ignore_errors=True)
+    freed = free_gb()
+    print(f"     ✅ Freed {output_size:.1f} GB — disk now has {freed:.1f} GB free")
 
-    print_storage_bar("After upload")
+    print_storage_bar("After cleanup")
 
     log_event(log, "completed", model_id, {
         "model_type": model_type,
