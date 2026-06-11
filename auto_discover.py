@@ -60,31 +60,37 @@ MMPROJ_ARCHITECTURES = {
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def hf_api(url: str, token: str | None = None) -> Any:
-    """GET a HuggingFace API endpoint and return parsed JSON."""
+    """Fallback REST API fetcher"""
     headers = {"User-Agent": "quant-kit/1.0"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    import urllib.request
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
+            import json
             return json.loads(resp.read())
-    except Exception as e:
+    except Exception:
         return None
 
 
 def get_supported_architectures() -> set[str]:
-    """Read supported architectures from the local convert_hf_to_gguf.py."""
+    """Dynamically read supported architectures by calling convert_hf_to_gguf.py."""
     if not CONVERT_SCRIPT.exists():
         return set()
     try:
-        src = CONVERT_SCRIPT.read_text(encoding="utf-8", errors="ignore")
-        names = re.findall(
-            r"^class (\w+(?:ForCausalLM|ForConditionalGeneration|Model"
-            r"|ForMaskedLM|ForSequenceClassification|ForTokenClassification))\b",
-            src, re.MULTILINE
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(CONVERT_SCRIPT), "--print-supported-models"],
+            capture_output=True, text=True
         )
+        # Some output goes to stdout, some to stderr
+        out = result.stdout + result.stderr
+        # Match lines like "  - ModelNameForCausalLM"
+        names = re.findall(r"-\s+(\w+)", out)
         return set(names)
-    except Exception:
+    except Exception as e:
+        print_step("warn", f"Could not extract architectures: {e}")
         return set()
 
 
@@ -167,16 +173,18 @@ def discover(
     if verbose:
         print_step("info", f"Querying HuggingFace trending models (task={task})...")
 
-    # Fetch trending models — get top 200 to have enough to filter
-    url = (
-        f"https://huggingface.co/api/models"
-        f"?sort=trending&limit=200&direction=-1"
-        f"&pipeline_tag={urllib.parse.quote(task)}"
-        f"&library=transformers"
-    )
-    models = hf_api(url, token)
-    if not models:
-        print_step("err", "Failed to fetch trending models from HuggingFace API")
+    from huggingface_hub import HfApi
+    api = HfApi(token=token)
+
+    try:
+        # Fetch top trending models
+        models = list(api.list_models(
+            sort="trendingScore", 
+            pipeline_tag=task,
+            limit=200
+        ))
+    except Exception as e:
+        print_step("err", f"Failed to fetch trending models: {e}")
         return []
 
     if verbose:
@@ -185,11 +193,11 @@ def discover(
     candidates = []
     checked = 0
 
-    for model_info in models:
-        model_id   = model_info.get("id", "")
+    for m in models:
+        model_id   = m.id
         model_name = model_id.split("/")[-1]
-        downloads  = model_info.get("downloads", 0) or 0
-        likes      = model_info.get("likes", 0) or 0
+        downloads  = getattr(m, "downloads", 0) or 0
+        likes      = getattr(m, "likes", 0) or 0
 
         # ── Filter 1: minimum download threshold ─────────────────────────────
         if downloads < min_downloads:
@@ -199,52 +207,58 @@ def discover(
         if "gguf" in model_name.lower() or "gguf" in model_id.lower():
             continue
 
-        # ── Filter 3: size must fit on laptop ─────────────────────────────────
-        size_gb = get_model_size_gb(model_info)
-        if size_gb is not None and size_gb > max_gb:
-            if verbose:
-                print(f"    ⏭  {model_id} ({size_gb:.1f} GB) — too large (max {max_gb} GB)")
+        # ── Filter 3: check if GGUF already well-covered ──────────────────────
+        checked += 1
+        saturated, existing_repos = check_gguf_exists(model_name, token)
+        gguf_count = len(existing_repos)
+
+        if saturated:
             continue
-        if size_gb is None:
-            size_gb = 0.0  # unknown, allow but mark
 
-        # ── Filter 4: architecture must be supported ───────────────────────────
-        config = model_info.get("config", {})
-        archs  = config.get("architectures", [])
+        # ── Filter 4: Fetch full info to get size and architecture ─────────────
+        if verbose:
+            print(f"    🔍 [{checked}] {model_id} — inspecting details...")
+            
+        try:
+            info = api.model_info(model_id)
+        except Exception:
+            continue
 
+        # Size check
+        size_gb = 0.0
+        if info.safetensors and info.safetensors.get("total"):
+            size_gb = (info.safetensors["total"] * 2) / (1024 ** 3)
+        elif info.siblings:
+            total_bytes = sum(s.size or 0 for s in info.siblings if s.rfilename.endswith(".safetensors"))
+            size_gb = total_bytes / (1024 ** 3)
+            
+        if size_gb > max_gb:
+            if verbose:
+                print(f"    ⏭  {model_id} ({size_gb:.1f} GB) — too large")
+            continue
+
+        # Architecture check
+        archs = getattr(info, "config", {}).get("architectures", []) if getattr(info, "config", None) else []
         if not archs:
-            continue  # can't verify — skip
+            if verbose:
+                print(f"    ⏭  {model_id} — no architecture info")
+            continue
 
         arch = archs[0]
 
-        # Determine model type
         if arch in MMPROJ_ARCHITECTURES:
             model_type = "vlm"
         elif supported_archs and arch in supported_archs:
             model_type = "llm"
         elif not supported_archs:
-            model_type = "llm"  # unknown supported list — allow
+            model_type = "llm"
         else:
             if verbose:
                 print(f"    ❌ {model_id} — unsupported arch: {arch}")
             continue
 
-        # ── Filter 5: check if GGUF already well-covered ──────────────────────
-        checked += 1
-        if verbose:
-            print(f"    🔍 [{checked}] {model_id} ({size_gb:.1f} GB, {arch}) — checking GGUF...")
-
-        saturated, existing_repos = check_gguf_exists(model_name, token)
-        gguf_count = len(existing_repos)
-
-        if saturated:
-            if verbose:
-                publishers = [r.split("/")[0] for r in existing_repos[:3]]
-                print(f"         ⛔ Saturated — already by: {', '.join(publishers)}")
-            continue
-
         # ── Passed all filters — compute score ────────────────────────────────
-        s = score_model(model_info, gguf_count)
+        s = score_model({"downloads": downloads, "likes": likes}, gguf_count)
         candidates.append({
             "model_id":   model_id,
             "model_name": model_name,
@@ -262,12 +276,11 @@ def discover(
             gap = "🟢 ZERO GGUF" if gguf_count == 0 else f"🟡 {gguf_count} partial"
             print(f"         ✅ CANDIDATE! {gap} | {downloads:,} downloads | {likes} likes | score={s:,.0f}")
 
-        # Small delay to be kind to HF API
-        time.sleep(0.3)
+        if len(candidates) >= count:
+            break
 
-    # Sort by score descending
     candidates.sort(key=lambda x: x["score"], reverse=True)
-    return candidates[:count]
+    return candidates
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
