@@ -270,6 +270,8 @@ Examples:
     parser.add_argument("--keep-fp16", action="store_true", help="Keep F16 GGUF after quantization")
     parser.add_argument("--delete-src",action="store_true", help="Delete downloaded model after F16 conversion")
     parser.add_argument("--batch",     "-b", type=int, default=0, help="Process N quants per run")
+    parser.add_argument("--skip-preflight", action="store_true",
+        help="Skip architecture check before downloading (use if preflight incorrectly blocks)")
     args = parser.parse_args()
 
     model_name  = args.model.split("/")[-1]
@@ -305,22 +307,55 @@ Examples:
 
     check_llama_cpp()
 
+    # 🛡️ Pre-flight: check architecture from config.json BEFORE downloading gigabytes
+    if not args.skip_preflight:
+        from huggingface_hub import hf_hub_download
+        import json as _json
+        print_step("info", "Pre-flight: checking architecture before download...")
+        try:
+            _cfg_path = hf_hub_download(
+                repo_id=args.model,
+                filename="config.json",
+                local_dir=str(MODELS_DIR / "_preflight_cache"),
+            )
+            with open(_cfg_path, encoding="utf-8") as _f:
+                _cfg = _json.load(_f)
+            _archs = _cfg.get("architectures", [])
+            if _archs:
+                _arch = _archs[0]
+                if _arch in MMPROJ_ARCHITECTURES:
+                    print_step("ok", f"Architecture supported (VLM): {_arch}")
+                else:
+                    # Check if it's at least a text LLM (llama.cpp TEXT models)
+                    print()
+                    print("  " + "=" * 58)
+                    print("  🚫 NOT A SUPPORTED VLM — Download Blocked")
+                    print("  " + "=" * 58)
+                    print(f"  Model       : {args.model}")
+                    print(f"  Architecture: {_arch}")
+                    print()
+                    print("  This architecture is NOT in quantize_vlm.py's VLM list.")
+                    print("  If it's a plain text LLM, use: python quantize.py instead.")
+                    print("  If it's a new VLM, update llama-src: git -C llama-src pull")
+                    print("  Force download anyway: add --skip-preflight")
+                    print("  " + "=" * 58)
+                    print()
+                    sys.exit(1)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print_step("warn", f"Pre-flight config fetch failed: {e} — proceeding")
+
     # Download
     model_dir = download_model(args.model)
 
-    # Pre-flight architecture check
+    # Post-download architecture check (informational only now — pre-flight already blocked bad ones)
     arch, is_vlm = detect_architecture(model_dir)
     print()
     if arch:
         print_step("info", f"Detected architecture: {arch}")
     if is_vlm:
         print_step("ok", "Architecture supports --mmproj (VLM confirmed)")
-    elif arch:
-        print_step("warn", f"Architecture '{arch}' is not in the MMPROJ supported list.")
-        print_step("warn", "Will attempt conversion anyway — mmproj step may fail.")
-        print()
-        print_step("info", "If this is a custom architecture, quantize_vlm.py cannot help.")
-        print_step("info", "Check: https://github.com/ggerganov/llama.cpp/issues")
     print()
 
     # Step 1: Convert text backbone to F16

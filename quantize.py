@@ -19,7 +19,7 @@ import subprocess
 import argparse
 import time
 from pathlib import Path
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, hf_hub_download
 
 from config import (
     IS_WINDOWS, LLAMA_CPP_DIR, LLAMA_SRC_DIR,
@@ -52,7 +52,74 @@ def check_llama_cpp(requires_imatrix: bool = False):
     print_step("ok", "llama.cpp binaries found")
 
 
-def download_model(model_id: str) -> Path:
+def get_supported_architectures() -> set[str]:
+    """Dynamically read supported architectures from your local convert_hf_to_gguf.py."""
+    try:
+        import re
+        src = CONVERT_SCRIPT.read_text(encoding="utf-8", errors="ignore")
+        # The converter lists them as class definitions with gguf_writer or _model_writers
+        # Most reliable: grep all class names that end with standard patterns
+        class_names = re.findall(r'^class (\w+(?:ForCausalLM|ForConditionalGeneration|Model|ForMaskedLM|ForSequenceClassification|ForTokenClassification))\b',
+                                 src, re.MULTILINE)
+        return set(class_names)
+    except Exception:
+        return set()  # If we can't read it, allow all (fail-open)
+
+
+def preflight_check(model_id: str) -> None:
+    """
+    Download ONLY config.json (~2KB) and verify architecture is supported
+    by your local llama.cpp BEFORE triggering a potentially huge download.
+    Exits with a clear error if the model cannot be converted.
+    """
+    from huggingface_hub import hf_hub_download
+    import json
+
+    print_step("info", f"Pre-flight check: verifying architecture support...")
+    try:
+        config_path = hf_hub_download(
+            repo_id=model_id,
+            filename="config.json",
+            local_dir=str(MODELS_DIR / "_preflight_cache"),
+        )
+        with open(config_path, encoding="utf-8") as f:
+            config = json.load(f)
+    except Exception as e:
+        print_step("warn", f"Could not fetch config.json: {e} — proceeding anyway")
+        return
+
+    archs = config.get("architectures", [])
+    if not archs:
+        print_step("warn", "No 'architectures' key in config.json — proceeding")
+        return
+
+    supported = get_supported_architectures()
+    unsupported = [a for a in archs if a not in supported]
+
+    if unsupported and supported:  # Only block if we successfully read the supported list
+        print()
+        print("  " + "=" * 58)
+        print("  🚫 UNSUPPORTED ARCHITECTURE — Download Blocked")
+        print("  " + "=" * 58)
+        print(f"  Model      : {model_id}")
+        print(f"  Architecture: {unsupported[0]}")
+        print()
+        print("  This architecture is NOT in your local convert_hf_to_gguf.py.")
+        print("  Downloading would waste disk space — the conversion will fail.")
+        print()
+        print("  Options:")
+        print("  1. Update llama-src: git -C llama-src pull")
+        print("     (New architectures are added often — check again after update)")
+        print("  2. Use bitsandbytes instead (4-bit via HuggingFace Transformers)")
+        print("  3. Force-proceed anyway: add --skip-preflight to your command")
+        print("  " + "=" * 58)
+        print()
+        sys.exit(1)
+    else:
+        print_step("ok", f"Architecture supported: {archs[0]}")
+
+
+def download_model(model_id: str, skip_preflight: bool = False) -> Path:
     """Download model from HuggingFace Hub."""
     model_name = model_id.split("/")[-1]
     local_dir = MODELS_DIR / model_name
@@ -60,6 +127,10 @@ def download_model(model_id: str) -> Path:
     if local_dir.exists() and any(local_dir.iterdir()):
         print_step("ok", f"Model already downloaded: {local_dir}")
         return local_dir
+
+    # 🛡️ Pre-flight: verify architecture BEFORE downloading gigabytes
+    if not skip_preflight:
+        preflight_check(model_id)
 
     print_step("info", f"Downloading {model_id} from HuggingFace...")
     import shutil as _shutil
@@ -209,6 +280,8 @@ def main():
     parser.add_argument("--delete-src", action="store_true", help="Delete downloaded model files after FP16 conversion to free disk space")
     parser.add_argument("--batch", "-b", type=int, default=0,
         help="Process N quants per run (re-run to continue). Already-completed quants are skipped. Example: --batch 2")
+    parser.add_argument("--skip-preflight", action="store_true",
+        help="Skip architecture support check (use if you know the model works but preflight blocks it)")
 
     args = parser.parse_args()
 
@@ -254,7 +327,7 @@ def main():
         return
 
     check_llama_cpp(requires_imatrix=requires_imatrix)
-    model_dir = download_model(args.model)
+    model_dir = download_model(args.model, skip_preflight=args.skip_preflight)
     fp16_path = convert_to_fp16_gguf(model_dir)
 
     if args.delete_src:
