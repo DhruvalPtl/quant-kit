@@ -55,15 +55,13 @@ def check_llama_cpp(requires_imatrix: bool = False):
 def get_supported_architectures() -> set[str]:
     """Dynamically read supported architectures from your local convert_hf_to_gguf.py."""
     try:
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, str(CONVERT_SCRIPT), "--print-supported-models"],
-            capture_output=True, text=True
-        )
-        out = result.stdout + result.stderr
         import re
-        names = re.findall(r"-\s+(\w+)", out)
-        return set(names)
+        src = CONVERT_SCRIPT.read_text(encoding="utf-8", errors="ignore")
+        # The converter lists them as class definitions with gguf_writer or _model_writers
+        # Most reliable: grep all class names that end with standard patterns
+        class_names = re.findall(r'^class (\w+(?:ForCausalLM|ForConditionalGeneration|Model|ForMaskedLM|ForSequenceClassification|ForTokenClassification))\b',
+                                 src, re.MULTILINE)
+        return set(class_names)
     except Exception:
         return set()  # If we can't read it, allow all (fail-open)
 
