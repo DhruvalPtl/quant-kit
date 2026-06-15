@@ -128,9 +128,9 @@ def download_binaries(has_cuda: bool):
 
     # Try patterns in priority order
     patterns = [
-        lambda n: "ubuntu" in n and "x64" in n and "vulkan" not in n and "rocm" not in n and "openvino" not in n and "arm" not in n,
-        lambda n: "ubuntu" in n and "x64" in n and "rocm" not in n and "openvino" not in n and "arm" not in n,
-        lambda n: "ubuntu" in n and "x64" in n,
+        lambda n: "ubuntu" in n and "x64" in n and all(x not in n for x in ["vulkan", "rocm", "openvino", "arm", "sycl"]),
+        lambda n: "ubuntu" in n and "x64" in n and all(x not in n for x in ["rocm", "openvino", "arm", "sycl"]),
+        lambda n: "ubuntu" in n and "x64" in n and "sycl" not in n,
         lambda n: "linux" in n and "x64" in n,
         lambda n: "ubuntu" in n and "x86" in n,
     ]
