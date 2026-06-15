@@ -227,6 +227,14 @@ Examples:
     print(f"  Tool:  {info['script']}")
     print("=" * 60)
 
+    from utils import global_log
+    global_log("quant.py", args.model, {
+        "type": model_type,
+        "preset": args.preset,
+        "quants": args.quants or args.quant,
+        "detect_only": args.detect_only
+    })
+
     if args.detect_only:
         print(f"\n  --detect-only: stopping here. Run:")
         print(f"     python {info['script']} --model {args.model}")

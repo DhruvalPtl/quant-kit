@@ -33,7 +33,8 @@ from pathlib import Path
 
 from config import OUTPUT_DIR, MODELS_DIR, HF_TOKEN
 from utils import print_step, format_size
-from auto_discover import discover
+from auto_discover import discover, fetch_architecture, get_supported_architectures, MMPROJ_ARCHITECTURES
+from huggingface_hub import HfApi
 
 LOG_FILE = Path(__file__).parent / "autopilot_log.json"
 
@@ -161,6 +162,14 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
     print(f"  ║  Type: {model_type.upper():<6} | Size: {size_gb:.1f} GB | Arch: {candidate['architecture'][:30]:<30} ║")
     print("  ╚" + "═" * 58 + "╝")
 
+    from utils import global_log
+    global_log("autopilot.py", model_id, {
+        "type": model_type,
+        "size_gb": size_gb,
+        "architecture": candidate['architecture'],
+        "dry_run": dry_run
+    })
+
     if dry_run:
         print_step("info", "  --dry-run: skipping actual quantization")
         return True
@@ -181,6 +190,12 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
     if model_type == "vlm":
         quant_cmd = [py, "quantize_vlm.py", "--model", model_id,
                      "--preset", preset, "--delete-src"]
+    elif model_type == "diffusion":
+        quant_cmd = [py, "quantize_diffusion.py", "--model", model_id,
+                     "--delete-src"]
+    elif model_type == "whisper":
+        quant_cmd = [py, "quantize_whisper.py", "--model", model_id,
+                     "--delete-src"]
 
     ok = run_step(f"Quantize {model_id} ({preset} preset)", quant_cmd, cwd=root)
     if not ok:
@@ -284,8 +299,11 @@ Examples:
     )
     parser.add_argument("--count",         "-n", type=int, default=3,
                         help="How many models to quantize (default: 3)")
-    parser.add_argument("--model",         type=str,
-                        help="Skip discovery and run autopilot on a specific model ID (e.g. Qwen/Qwen3-4B-Instruct-2507)")
+    parser.add_argument("--model",         type=str, default=None,
+                        help="Specific model ID to process (bypasses discovery, e.g. moonshotai/Kimi-VL-A3B-Instruct)")
+    parser.add_argument("--type",          type=str, default=None,
+                        choices=["llm", "vlm", "diffusion", "whisper"],
+                        help="Override model type when using --model")
     parser.add_argument("--max-gb",        type=float, default=15.0,
                         help="Max model download size in GB (default: 15.0)")
     parser.add_argument("--min-downloads", type=int,   default=500,
@@ -337,26 +355,45 @@ Examples:
     # ─── Discovery ────────────────────────────────────────────────────────────
     print()
     print("  " + "─" * 60)
-    
-    if args.model:
-        print(f"  🎯 TARGET MODE — skipping discovery to process: {args.model}")
-        print("  " + "─" * 60)
-        candidates = [{
-            "model_id": args.model,
-            "model_name": args.model.split("/")[-1],
-            "size_gb": 5.0, # fallback
-            "downloads": 0,
-            "likes": 0,
-            "model_type": "llm",
-            "architecture": "unknown",
-            "gguf_repos": 0,
-            "has_major": False
-        }]
-    else:
-        print("  🔍 STEP 1 — Discovering candidates...")
-        print("  " + "─" * 60)
-        print()
+    print("  🔍 STEP 1 — Discovering candidates...")
+    print("  " + "─" * 60)
+    print()
 
+    if args.model:
+        print_step("info", f"Bypassing discovery. Fetching metadata for specific model: {args.model}")
+        api = HfApi(token=HF_TOKEN)
+        try:
+            info = api.model_info(args.model, files_metadata=True)
+            total_bytes = sum(f.size for f in info.siblings if f.size is not None and (f.rfilename.endswith('.safetensors') or f.rfilename.endswith('.bin')))
+            size_gb = total_bytes / (1024 ** 3) if total_bytes else 0.0
+            
+            arch = fetch_architecture(args.model, HF_TOKEN)
+            supported_archs = get_supported_architectures()
+            
+            if args.type:
+                model_type = args.type
+            elif arch in MMPROJ_ARCHITECTURES:
+                model_type = "vlm"
+            elif supported_archs and arch in supported_archs:
+                model_type = "llm"
+            else:
+                model_type = "llm"  # fallback
+                
+            candidate = {
+                "model_id": args.model,
+                "model_name": args.model.split("/")[-1],
+                "architecture": arch or "unknown",
+                "model_type": model_type,
+                "size_gb": round(size_gb, 2),
+                "downloads": getattr(info, 'downloads', 0),
+                "likes": getattr(info, 'likes', 0),
+                "gguf_repos": 0,
+            }
+            candidates = [candidate]
+        except Exception as e:
+            print_step("err", f"Failed to fetch info for {args.model}: {e}")
+            sys.exit(1)
+    else:
         # Fetch 5x more than needed — stricter filters mean fewer pass through
         fetch_count = args.count * 5
         candidates = discover(
@@ -370,13 +407,13 @@ Examples:
             verbose=True,
         )
 
-    # Filter out already-done models
-    new_candidates = [c for c in candidates if c["model_id"] not in already_done]
-    if len(new_candidates) < len(candidates):
-        skipped = len(candidates) - len(new_candidates)
-        print_step("info", f"Skipping {skipped} already-completed models from previous runs")
+        # Filter out already-done models
+        new_candidates = [c for c in candidates if c["model_id"] not in already_done]
+        if len(new_candidates) < len(candidates):
+            skipped = len(candidates) - len(new_candidates)
+            print_step("info", f"Skipping {skipped} already-completed models from previous runs")
 
-    candidates = new_candidates[:args.count]
+        candidates = new_candidates[:args.count]
 
     if not candidates:
         print()

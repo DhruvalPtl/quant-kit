@@ -193,6 +193,13 @@ def main():
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
 
+    from utils import global_log
+    global_log("benchmark.py", args.model, {
+        "num_files": len(file_results),
+        "ngl": args.ngl,
+        "threads": args.threads
+    })
+
     print_step("ok", f"Results saved → {out_file}")
     print_step("info", "Run model_card.py to embed these results in your HuggingFace README.")
 

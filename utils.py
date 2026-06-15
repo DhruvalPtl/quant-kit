@@ -67,3 +67,67 @@ def get_hardware_info() -> dict:
     info["gpu"] = gpu
 
     return info
+
+def global_log(script: str, model_id: str, details: dict = None):
+    """
+    Log an event to a central HuggingFace Dataset (`quant-kit-logs`).
+    This aggregates logs across Laptop, Colab, Kaggle, etc.
+    """
+    import json, time, os, socket, tempfile
+    from huggingface_hub import HfApi
+    from config import HF_TOKEN
+
+    if not HF_TOKEN:
+        return
+
+    try:
+        api = HfApi(token=HF_TOKEN)
+        user = api.whoami()["name"]
+        repo_id = f"{user}/quant-kit-logs"
+        
+        # Check if repo exists, if not create it
+        try:
+            api.dataset_info(repo_id)
+        except Exception:
+            api.create_repo(repo_id=repo_id, repo_type="dataset", private=True)
+            
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+        
+        # Detect environment
+        if os.environ.get("COLAB_GPU"):
+            env = "Google Colab"
+        elif os.environ.get("KAGGLE_KERNEL_RUN_TYPE"):
+            env = "Kaggle"
+        else:
+            env = socket.gethostname()
+
+        hw_info = get_hardware_info()
+        
+        log_entry = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "environment": env,
+            "hardware": hw_info,
+            "script": script,
+            "model_id": model_id,
+            "details": details or {}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+            json.dump(log_entry, f, indent=2)
+            tmp_path = f.name
+            
+        safe_model_id = model_id.replace('/', '_')
+        file_path = f"logs/{timestamp_str}_{safe_model_id}.json"
+        
+        # Upload fire-and-forget
+        api.upload_file(
+            path_or_fileobj=tmp_path,
+            path_in_repo=file_path,
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"Log: {script} -> {model_id}"
+        )
+        os.unlink(tmp_path)
+    except Exception as e:
+        # Silently fail so we don't crash the main pipeline if logging fails
+        print(f"\n  [WARN] Could not upload to global log: {e}\n")
