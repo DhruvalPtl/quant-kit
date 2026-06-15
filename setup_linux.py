@@ -261,7 +261,27 @@ def setup_conversion_scripts():
         cwd=ROOT_DIR
     )
     run("git sparse-checkout add conversion/ gguf-py/", cwd=LLAMA_SRC_DIR)
-    ok(f"Conversion scripts ready in {LLAMA_SRC_DIR}")
+    print("[OK] Conversion scripts ready in " + str(LLAMA_SRC_DIR))
+    
+    # -------------------------------------------------------------------------
+    # HOTFIX: Patch llama.cpp conversion scripts to support Qwen 3.6 tokenizer
+    # -------------------------------------------------------------------------
+    base_py = LLAMA_SRC_DIR / "conversion" / "base.py"
+    if base_py.exists():
+        content = base_py.read_text(encoding="utf-8")
+        if "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945" not in content:
+            patch = '''
+        if chkhsh == "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945":
+            # ref: Qwen/Qwen3.6-27B
+            res = "qwen2"
+
+        if res is None:'''
+            content = content.replace("        if res is None:", patch)
+            base_py.write_text(content, encoding="utf-8")
+            print("[OK] Auto-patched llama.cpp to support Qwen 3.6 tokenizer")
+
+    print("\n")
+    print_step("info", "Verifying setup...")
 
 
 # ─── Step 6: Verify everything ────────────────────────────────────────────────
