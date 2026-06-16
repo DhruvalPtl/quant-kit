@@ -200,6 +200,8 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
     ok = run_step(f"Quantize {model_id} ({preset} preset)", quant_cmd, cwd=root)
     if not ok:
         log_event(log, "failed", model_id, {"step": "quantize"})
+        # Aggressively clean up downloaded source files if quantization crashes!
+        shutil.rmtree(str(MODELS_DIR / model_name), ignore_errors=True)
         return False
 
     # Check output actually exists — and that it has real QUANTS (not just F16)
@@ -407,11 +409,11 @@ Examples:
             verbose=True,
         )
 
-        # Filter out already-done models
-        new_candidates = [c for c in candidates if c["model_id"] not in already_done]
+        # Filter out already-done and already-failed models
+        new_candidates = [c for c in candidates if c["model_id"] not in already_done and c["model_id"] not in already_failed]
         if len(new_candidates) < len(candidates):
             skipped = len(candidates) - len(new_candidates)
-            print_step("info", f"Skipping {skipped} already-completed models from previous runs")
+            print_step("info", f"Skipping {skipped} models that were already completed or previously failed")
 
         candidates = new_candidates[:args.count]
 
