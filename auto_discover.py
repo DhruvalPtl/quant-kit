@@ -208,9 +208,18 @@ def check_gguf_coverage(
         if model_lower in r.get("id", "").lower()
     ]
 
-    # Check if YOU already have it published
+    # Check if YOU already have it published (Direct API lookup bypassing search index delay)
     my_repo = f"{my_username}/{model_name}-GGUF".lower()
     already_mine = any(r.lower() == my_repo for r in exact_matches)
+    
+    if not already_mine:
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=token)
+            api.model_info(f"{my_username}/{model_name}-GGUF")
+            already_mine = True
+        except Exception:
+            pass
 
     # Check if major quantizers have it
     has_major = any(
