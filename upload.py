@@ -55,7 +55,7 @@ def get_files_to_upload(model_dir: Path, model_type: str, include_fp16: bool = F
         if include_fp16:
             files.extend(text)
         else:
-            quant_text = [f for f in text if "F16" not in f.name]
+            quant_text = [f for f in text if "-F16.gguf" not in f.name]
             if not quant_text:
                 print_step("err", "No quantized text GGUFs found (use --include-fp16 to upload F16)")
                 sys.exit(1)
@@ -69,7 +69,7 @@ def get_files_to_upload(model_dir: Path, model_type: str, include_fp16: bool = F
         if include_fp16:
             files.extend(all_guufs)
         else:
-            quant_files = [f for f in all_guufs if "F16" not in f.name]
+            quant_files = [f for f in all_guufs if "-F16.gguf" not in f.name]
             if not quant_files:
                 print_step("err", "No quantized GGUF files found (use --include-fp16 to upload F16)")
                 sys.exit(1)
