@@ -152,7 +152,7 @@ def download_model(model_id: str, skip_preflight: bool = False) -> Path:
         sys.exit(1)
 
 
-def convert_to_fp16_gguf(model_dir: Path) -> Path:
+def convert_to_fp16_gguf(model_dir: Path, no_mtp: bool = False) -> Path:
     """Convert HuggingFace model to FP16 GGUF (lossless base format)."""
     model_name = model_dir.name
     output_path = OUTPUT_DIR / model_name / f"{model_name}-F16.gguf"
@@ -176,6 +176,8 @@ def convert_to_fp16_gguf(model_dir: Path) -> Path:
         "--outfile", str(output_path),
         "--outtype", "f16",
     ]
+    if no_mtp:
+        cmd.append("--no-mtp")
 
     result = subprocess.run(cmd, capture_output=False, text=True, cwd=str(LLAMA_SRC_DIR))
 
@@ -282,6 +284,8 @@ def main():
         help="Process N quants per run (re-run to continue). Already-completed quants are skipped. Example: --batch 2")
     parser.add_argument("--skip-preflight", action="store_true",
         help="Skip architecture support check (use if you know the model works but preflight blocks it)")
+    parser.add_argument("--no-mtp", action="store_true",
+        help="Exclude the multi-token prediction (MTP) head from the converted GGUF")
 
     args = parser.parse_args()
 
@@ -328,7 +332,7 @@ def main():
 
     check_llama_cpp(requires_imatrix=requires_imatrix)
     model_dir = download_model(args.model, skip_preflight=args.skip_preflight)
-    fp16_path = convert_to_fp16_gguf(model_dir)
+    fp16_path = convert_to_fp16_gguf(model_dir, no_mtp=args.no_mtp)
 
     if args.delete_src:
         print()

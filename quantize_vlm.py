@@ -155,8 +155,8 @@ def download_model(model_id: str) -> Path:
         sys.exit(1)
 
 
-def convert_text_backbone(model_dir: Path) -> Path:
-    """Convert VLM text backbone to F16 GGUF (no mmproj)."""
+def convert_text_backbone(model_dir: Path, no_mtp: bool = False) -> Path:
+    """Convert text backbone to F16 GGUF."""
     model_name = model_dir.name
     out_dir = OUTPUT_DIR / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -177,6 +177,8 @@ def convert_text_backbone(model_dir: Path) -> Path:
         "--outfile", str(out_path),
         "--outtype", "f16",
     ]
+    if no_mtp:
+        cmd.append("--no-mtp")
     result = subprocess.run(cmd, text=True, cwd=str(LLAMA_SRC_DIR))
     if result.returncode != 0:
         print_step("err", "Text backbone conversion failed!")
@@ -272,6 +274,7 @@ Examples:
     parser.add_argument("--batch",     "-b", type=int, default=0, help="Process N quants per run")
     parser.add_argument("--skip-preflight", action="store_true",
         help="Skip architecture check before downloading (use if preflight incorrectly blocks)")
+    parser.add_argument("--no-mtp", action="store_true", help="Exclude the multi-token prediction (MTP) head from GGUF")
     args = parser.parse_args()
 
     model_name  = args.model.split("/")[-1]
@@ -359,7 +362,7 @@ Examples:
     print()
 
     # Step 1: Convert text backbone to F16
-    fp16_path = convert_text_backbone(model_dir)
+    fp16_path = convert_text_backbone(model_dir, no_mtp=args.no_mtp)
     print()
 
     # Step 2: Convert vision encoder (mmproj) — always F16, done once

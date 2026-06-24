@@ -140,7 +140,7 @@ def run_step(label: str, cmd: list[str], cwd: str = None) -> bool:
 
 # ─── Per-model pipeline ───────────────────────────────────────────────────────
 
-def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False, batch: int = 0) -> bool:
+def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False, batch: int = 0, no_mtp: bool = False) -> bool:
     """
     Run the full pipeline for one model:
       1. Quantize (quantize.py or quantize_vlm.py via quant.py)
@@ -200,6 +200,8 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
 
     if batch > 0:
         quant_cmd.extend(["--batch", str(batch)])
+    if no_mtp:
+        quant_cmd.append("--no-mtp")
 
     ok = run_step(f"Quantize {model_id} ({preset} preset)", quant_cmd, cwd=root)
     if not ok:
@@ -327,6 +329,8 @@ Examples:
                         help="Stop if free disk drops below this GB (default: 10.0)")
     parser.add_argument("--min-likes",     type=int,   default=5,
                         help="Minimum likes on HF to consider (default: 5, filters test repos)")
+    parser.add_argument("--no-mtp",        action="store_true",
+                        help="Exclude the multi-token prediction (MTP) head from GGUF")
     args = parser.parse_args()
 
     log = load_log()
@@ -497,7 +501,7 @@ Examples:
             print(f"  Free up space and re-run. Already-completed models will be skipped.")
             break
 
-        success = process_model(candidate, args.preset, log, dry_run=args.dry_run, batch=args.batch)
+        success = process_model(candidate, args.preset, log, dry_run=args.dry_run, batch=args.batch, no_mtp=args.no_mtp)
 
         if success:
             results["ok"].append(model_id)

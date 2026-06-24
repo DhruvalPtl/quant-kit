@@ -191,6 +191,7 @@ Examples:
     parser.add_argument("--keep-fp16",     action="store_true")
     parser.add_argument("--delete-src",    action="store_true")
     parser.add_argument("--private",       action="store_true", help="Make HF repo private (passed to upload.py)")
+    parser.add_argument("--no-mtp",        action="store_true", help="Exclude the multi-token prediction (MTP) head from GGUF")
 
     # Diffusion-specific
     parser.add_argument("--model-file", help="Path to .safetensors file (diffusion only)")
@@ -250,6 +251,7 @@ Examples:
         if args.batch:   cmd += ["--batch", str(args.batch)]
         if args.keep_fp16:  cmd.append("--keep-fp16")
         if args.delete_src: cmd.append("--delete-src")
+        if args.no_mtp:     cmd.append("--no-mtp")
 
     elif model_type == "diffusion":
         if args.quant:      cmd += ["--quant", args.quant]
