@@ -140,7 +140,7 @@ def run_step(label: str, cmd: list[str], cwd: str = None) -> bool:
 
 # ─── Per-model pipeline ───────────────────────────────────────────────────────
 
-def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False) -> bool:
+def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False, batch: int = 0) -> bool:
     """
     Run the full pipeline for one model:
       1. Quantize (quantize.py or quantize_vlm.py via quant.py)
@@ -176,8 +176,9 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
 
     # ── Storage check before download ────────────────────────────────────────
     # Need: download size + F16 size (~2x) + quant outputs (~1.5x per quant × 10)
-    # Conservative: 5x download size
-    required = max(size_gb * 5, 10.0)
+    # Conservative: 3x if partial batch, 5x otherwise
+    storage_mult = 3.0 if batch > 0 else 5.0
+    required = max(size_gb * storage_mult, 10.0)
     if not storage_alert(required, f"download+quant of {model_name}"):
         log_event(log, "skipped", model_id, {"reason": "insufficient disk space",
                                                "free_gb": free_gb(), "required_gb": required})
@@ -196,6 +197,9 @@ def process_model(candidate: dict, preset: str, log: dict, dry_run: bool = False
     elif model_type == "whisper":
         quant_cmd = [py, "quantize_whisper.py", "--model", model_id,
                      "--delete-src"]
+
+    if batch > 0:
+        quant_cmd.extend(["--batch", str(batch)])
 
     ok = run_step(f"Quantize {model_id} ({preset} preset)", quant_cmd, cwd=root)
     if not ok:
@@ -317,6 +321,8 @@ Examples:
                         help="HuggingFace pipeline_tag (default: text-generation)")
     parser.add_argument("--dry-run",       action="store_true",
                         help="Discover and plan only — no actual quantization or upload")
+    parser.add_argument("--batch",         "-b", type=int, default=0,
+                        help="Process N quants per run (re-run to continue) to save space")
     parser.add_argument("--stop-gb",       type=float, default=10.0,
                         help="Stop if free disk drops below this GB (default: 10.0)")
     parser.add_argument("--min-likes",     type=int,   default=5,
@@ -491,7 +497,7 @@ Examples:
             print(f"  Free up space and re-run. Already-completed models will be skipped.")
             break
 
-        success = process_model(candidate, args.preset, log)
+        success = process_model(candidate, args.preset, log, dry_run=args.dry_run, batch=args.batch)
 
         if success:
             results["ok"].append(model_id)
