@@ -267,6 +267,28 @@ def setup_conversion_scripts():
                 content = content.replace("        if res is None:", patch)
                 base_py.write_text(content, encoding="utf-8")
                 print("[OK] Auto-patched llama.cpp to support Qwen 3.6 tokenizer")
+
+        # -------------------------------------------------------------------------
+        # HOTFIX: Patch llama.cpp qwen.py to remove transformers bytes_to_unicode dependency
+        # -------------------------------------------------------------------------
+        qwen_py = LLAMA_SRC_DIR / "conversion" / "qwen.py"
+        if qwen_py.exists():
+            content = qwen_py.read_text(encoding="utf-8")
+            if "from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode" in content:
+                target_str = """        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # ty: ignore[unresolved-import]
+        byte_encoder = bytes_to_unicode()"""
+                replacement = """        bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+        cs = bs[:]
+        n = 0
+        for b_val in range(256):
+            if b_val not in bs:
+                bs.append(b_val)
+                cs.append(256 + n)
+                n += 1
+        byte_encoder = dict(zip(bs, [chr(n) for n in cs]))"""
+                content = content.replace(target_str, replacement)
+                qwen_py.write_text(content, encoding="utf-8")
+                print("[OK] Auto-patched llama.cpp to fix bytes_to_unicode transformers ImportError")
                 
         return
 
@@ -297,6 +319,28 @@ def setup_conversion_scripts():
             content = content.replace("        if res is None:", patch)
             base_py.write_text(content, encoding="utf-8")
             print("[OK] Auto-patched llama.cpp to support Qwen 3.6 tokenizer")
+
+    # -------------------------------------------------------------------------
+    # HOTFIX: Patch llama.cpp qwen.py to remove transformers bytes_to_unicode dependency
+    # -------------------------------------------------------------------------
+    qwen_py = LLAMA_SRC_DIR / "conversion" / "qwen.py"
+    if qwen_py.exists():
+        content = qwen_py.read_text(encoding="utf-8")
+        if "from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode" in content:
+            target_str = """        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # ty: ignore[unresolved-import]
+        byte_encoder = bytes_to_unicode()"""
+            replacement = """        bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+        cs = bs[:]
+        n = 0
+        for b_val in range(256):
+            if b_val not in bs:
+                bs.append(b_val)
+                cs.append(256 + n)
+                n += 1
+            byte_encoder = dict(zip(bs, [chr(n) for n in cs]))"""
+            content = content.replace(target_str, replacement)
+            qwen_py.write_text(content, encoding="utf-8")
+            print("[OK] Auto-patched llama.cpp to fix bytes_to_unicode transformers ImportError")
 
     print("\n")
     print_step("info", "Verifying setup...")
