@@ -30,12 +30,12 @@ import subprocess
 import argparse
 import time
 from pathlib import Path
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, HfApi
 
 from config import (
     IS_WINDOWS, LLAMA_CPP_DIR, LLAMA_SRC_DIR,
     MODELS_DIR, OUTPUT_DIR, DEFAULT_QUANTS, QUANT_PRESETS,
-    LLAMA_QUANTIZE, CONVERT_SCRIPT,
+    LLAMA_QUANTIZE, CONVERT_SCRIPT, HF_TOKEN,
 )
 from utils import print_step, get_size
 
@@ -282,8 +282,21 @@ Examples:
     output_dir  = OUTPUT_DIR / model_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── Check remote repo for already uploaded quants ──────────────────────────
+    api = HfApi(token=HF_TOKEN)
+    try:
+        user = api.whoami()
+        repo_id = f"{user['name']}/{model_name}-GGUF"
+        info = api.model_info(repo_id=repo_id)
+        remote_files = set(f.rfilename for f in info.siblings)
+    except Exception:
+        remote_files = set()
+
     def is_done(qt): 
-        p = output_dir / f"{model_name}-{qt}.gguf"
+        filename = f"{model_name}-{qt}.gguf"
+        if filename in remote_files:
+            return True
+        p = output_dir / filename
         return p.exists() and p.stat().st_size > 100 * 1024 * 1024
 
     pending   = [q for q in all_quants if not is_done(q)]
