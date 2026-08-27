@@ -354,9 +354,6 @@ def setup_conversion_scripts():
             qwen_py.write_text(content, encoding="utf-8")
             print("[OK] Auto-patched llama.cpp to fix bytes_to_unicode transformers ImportError")
 
-    print("\n")
-    print_step("info", "Verifying setup...")
-
 
 # ─── Step 6: Verify everything ────────────────────────────────────────────────
 
