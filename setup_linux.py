@@ -87,13 +87,24 @@ def check_cuda() -> bool:
 def get_release_info() -> tuple[str, dict]:
     """Fetch latest llama.cpp release asset URLs from GitHub API."""
     header("Fetching latest llama.cpp release info...")
-    url = "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest"
+    url = "https://api.github.com/repos/ggerganov/llama.cpp/releases"
     req = urllib.request.Request(url, headers={"User-Agent": "quant-kit/1.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
-        data = json.loads(r.read())
+        releases = json.loads(r.read())
 
-    tag    = data["tag_name"]
-    assets = {a["name"]: a["browser_download_url"] for a in data["assets"]}
+    # Find the latest release that has actual binary assets
+    release = None
+    for rel in releases:
+        if rel.get("assets") and len(rel["assets"]) > 1:
+            release = rel
+            break
+
+    if not release:
+        # Fallback to the first release if none matched
+        release = releases[0] if releases else {}
+
+    tag    = release.get("tag_name", "unknown")
+    assets = {a["name"]: a["browser_download_url"] for a in release.get("assets", [])}
 
     ok(f"Latest release: {tag}")
 
@@ -104,6 +115,7 @@ def get_release_info() -> tuple[str, dict]:
         print(f"    {n}")
 
     return tag, assets
+
 
 
 def download_binaries(has_cuda: bool):
